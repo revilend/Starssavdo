@@ -26,7 +26,7 @@ Ishlatish:
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -62,6 +62,18 @@ class _ChannelLike(Protocol):
     title: str
 
 
+def _channel_field(channel: Any, key: str) -> Any:
+    """
+    Kanal maydonini olish — dict YOKI ORM obyekt uchun ham ishlaydi.
+
+    Servis `list[dict]` uzatadi, repository esa ORM obyektlar qaytaradi —
+    ikkala shakl ham qo'llab-quvvatlanadi.
+    """
+    if isinstance(channel, Mapping):
+        return channel[key]
+    return getattr(channel, key)
+
+
 class _ProductLike(Protocol):
     id: int
     title: str
@@ -90,7 +102,7 @@ def get_subscription_kb(channels: Sequence[_ChannelLike]) -> InlineKeyboardMarku
     for index, channel in enumerate(channels, start=1):
         builder.button(
             text=f"📢 {index}-Kanalga a'zo bo'lish",
-            url=channel.invite_link,
+            url=_channel_field(channel, "invite_link"),
         )
     # Kanallar vertikal (har bir qatorda bittadan)
     builder.adjust(1)
