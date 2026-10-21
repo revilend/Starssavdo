@@ -142,6 +142,15 @@ class VelocityCheck(NamedTuple):
     flagged: bool
 
 
+class TopReferrer(NamedTuple):
+    """Top taklif qiluvchi qatori (🏆 reyting uchun)."""
+
+    user_id: int
+    username: str | None
+    first_name: str | None
+    completed: int
+
+
 class TotalStats(NamedTuple):
     """Admin statistikasi (get_total_stats)."""
 
@@ -722,6 +731,42 @@ class ReferralRepository:
                 total=int(row.total or 0),
                 completed=int(row.completed or 0),
             )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_top_referrers(limit: int = 10) -> list[TopReferrer]:
+        """
+        Eng ko'p do'st taklif qilgan foydalanuvchilar reytingi.
+
+        Faqat `completed` (mukofot berilgan) takliflar sanaladi —
+        pending yozuvlar reytingga ta'sir qilmaydi.
+
+        Returns: TopReferrer(user_id, username, first_name, completed)
+            ko'rinishidagi ro'yxat — kamayish tartibida, `limit` taga.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(
+                    User.user_id,
+                    User.username,
+                    User.first_name,
+                    func.count(Referral.id).label("completed"),
+                )
+                .join(Referral, Referral.referrer_id == User.user_id)
+                .where(Referral.status == REFERRAL_COMPLETED)
+                .group_by(User.user_id)
+                .order_by(func.count(Referral.id).desc(), User.user_id.asc())
+                .limit(limit)
+            )
+            return [
+                TopReferrer(
+                    user_id=int(row.user_id),
+                    username=row.username,
+                    first_name=row.first_name,
+                    completed=int(row.completed),
+                )
+                for row in result.all()
+            ]
 
     # ------------------------------------------------------------------
     @staticmethod

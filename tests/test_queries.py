@@ -271,6 +271,26 @@ async def main() -> None:
     ids = await UserRepository.get_all_user_ids()
     ok("no'faol chetlab o'tildi", len(ids) == 19 and 1003 not in ids)
 
+    print("== 9. Top referrers ==")
+    # 2001-2003 uchun completed referallar yaratamiz (2003: 3 ta, 2002: 2 ta, 2001: 1 ta)
+    for uid in (2001, 2002, 2003):
+        await UserRepository.get_or_create_user(uid, f"top{uid}", "Top", None)
+    async with conn_mod._session_factory() as s:
+        async with s.begin():
+            for referrer, n in ((2003, 3), (2002, 2), (2001, 1)):
+                for i in range(n):
+                    referred = 3000 + referrer * 10 + i
+                    await UserRepository.get_or_create_user(referred, None, "R", None)
+                    s.add(Referral(referrer_id=referrer, referred_id=referred,
+                                   status="completed", reward_amount=5))
+    top = await ReferralRepository.get_top_referrers(limit=10)
+    # 1001 (1 completed) ham ro'yxatda — tartib: completed desc, user_id asc
+    ok("top tartibi kamayish", [t.user_id for t in top][:3] == [2003, 2002, 1001], str(top))
+    ok("top completed sonlari", top[0].completed == 3 and top[1].completed == 2)
+    top2 = await ReferralRepository.get_top_referrers(limit=2)
+    ok("limit ishlaydi", len(top2) == 2 and top2[0].user_id == 2003)
+    ok("top'da username/first_name", top[0].username == "top2003" and top[0].first_name == "Top")
+
     print(f"\nBARCHA TESTLAR O'TDI: {PASSED} ta tekshiruv")
 
 
