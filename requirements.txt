@@ -1,0 +1,28 @@
+# =============================================================
+# Telegram Stars, NFT, Premium va Referal boti - Bog'liqliklar
+# =============================================================
+# Python 3.11+ tavsiya etiladi
+
+# Telegram bot framework (asinxron, 3.x API)
+aiogram>=3.13.0
+
+# .env faylini pydantic modellari orqali yuklash (type-safe konfiguratsiya)
+pydantic-settings>=2.4.0
+
+# PostgreSQL uchun yuqori unumdorlikdagi asinxron drayver (Supabase bilan ishlash uchun)
+asyncpg>=0.29.0
+
+# ORM / asinxron engine va connection pool boshqaruvi (SQLAlchemy 2.0 async API)
+sqlalchemy>=2.0.30
+
+# Webhook qabul qiluvchi HTTP server (aiogram webhook rejimi uchun)
+uvicorn>=0.30.0
+
+# Webhook endpointlarini taqdim etuvchi lightweight HTTP framework
+fastapi>=0.112.0
+
+# .env faylini environment o'zgaruvchilariga yuklab beruvchi yordamchi kutubxona
+python-dotenv>=1.0.1
+
+# Keshlash (masalan, referal kodlar, user keshlari uchun TTL kesh)
+cachetools>=5.4.0

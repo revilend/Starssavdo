@@ -1,0 +1,154 @@
+"""
+config/settings.py
+===================
+Loyiha konfiguratsiyasi: `.env` faylidagi barcha parametrlarni
+`pydantic-settings` yordamida yuklaydi va tekshiradi.
+
+Xususiyatlar:
+ - Har bir o'zgaruvchi tip bilan e'lon qilingan (type-safe).
+ - ADMIN_IDS: vergul bilan ajratilgan satrni `list[int]` ga o'tkazuvchi validator.
+ - Singleton `settings` obyekti: butun loyiha bo'ylab bitta nusxa ishlatiladi.
+
+Ishlatish:
+    from config.settings import settings
+    print(settings.BOT_TOKEN)
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from typing import Annotated
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """
+    `.env` faylidagi barcha parametrlarni yuklovchi asosiy konfiguratsiya modeli.
+
+    pydantic-settings har bir maydon nomini `.env` dagi mos o'zgaruvchi bilan
+    avtomatik ravishda moslashtiradi (case-insensitive).
+    """
+
+    # pydantic-settings konfiguratsiyasi:
+    #  - env_file=".env" -> qo'shimcha .env faylini yuklaydi
+    #  - extra="ignore" -> .env ichidagi notanish o'zgaruvchilarni e'tibors qoldiradi
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # ------------------------- Telegram -------------------------
+    BOT_TOKEN: str = Field(
+        ...,
+        description="BotFather'dan olingan Telegram bot tokeni",
+    )
+
+    # ADMIN_IDS asosiy sifatida str bo'lib keladi, keyin validator orqali
+    # list[int] ga o'tkaziladi (quyida field_validator ko'rsatilgan).
+    #
+    # NoDecode (pydantic-settings >= 2.3): murakkab tipni .env dan JSON emas,
+    # xom satr sifatida qabul qilishga majbur qiladi. Aks holda pydantic-settings
+    # "111,222" ni JSON deb hisoblab, field_validator dan oldin xato berardi.
+    ADMIN_IDS: Annotated[list[int], NoDecode] = Field(
+        ...,
+        description="Admin Telegram IDlari ro'yxati (vergul bilan ajratilgan)",
+    )
+
+    # ------------------------- Bazа -----------------------------
+    DATABASE_URL: str = Field(
+        ...,
+        description="Supabase PostgreSQL connection string",
+    )
+
+    # ----------------------- Stars / Ekonomika ------------------
+    REFERRAL_REWARD_STARS: int = Field(
+        default=10,
+        description="Referal taklif uchun beriladigan yutuq (Telegram Stars)",
+        ge=0,
+    )
+
+    MIN_WITHDRAWAL_STARS: int = Field(
+        default=50,
+        description="Minimal yechib olish miqdori (Telegram Stars)",
+        ge=1,
+    )
+
+    # ------------------------- Webhook / Server -----------------
+    WEBHOOK_URL: str = Field(
+        default="",
+        description="Telegram webhook manzili (masalan, https://bot.onrender.com)",
+    )
+
+    WEBHOOK_PATH: str = Field(
+        default="/webhook",
+        description="Webhook endpoint path'i",
+    )
+
+    PORT: int = Field(
+        default=8080,
+        description="Server tinglaydigan port",
+        ge=1,
+        le=65535,
+    )
+
+    # ------------------------ Validatorlar ----------------------
+    @field_validator("ADMIN_IDS", mode="before")
+    @classmethod
+    def _parse_admin_ids(cls, value: object) -> list[int]:
+        """
+        ADMIN_IDS ni `list[int]` holatiga o'tkazadi.
+
+        Qabul qiladigan formatlar:
+          - "123456789,987654321"  -> [123456789, 987654321]
+          - "123456789"            -> [123456789]
+          - [123456789, 987654321]  -> [123456789, 987654321] (allaqachon ro'yxat)
+          - 123456789              -> [123456789] (yakka son)
+
+        Bo'sh qatorlar va bo'shliqlar avtomatik tozalanadi.
+        """
+        # 1) Allaqachon ro'yxat bo'lsa - faqat int ga tekshiramiz
+        if isinstance(value, list):
+            return [int(item) for item in value]
+
+        # 2) Yakka son bo'lsa - bitta elementli ro'yxatga aylantiramiz
+        if isinstance(value, int):
+            return [value]
+
+        # 3) Satr bo'lsa - vergul bo'yicha ajratamiz va int ga o'tkazamiz
+        if isinstance(value, str):
+            parts = [part.strip() for part in value.split(",")]
+            return [int(part) for part in parts if part]
+
+        # 4) Boshqa formatlar uchun xato qaytaramiz
+        raise TypeError(
+            f"ADMIN_IDS noto'g'ri formatda: {value!r}. "
+            "Masalan: '123456789,987654321' kutilmoqda."
+        )
+
+    @field_validator("WEBHOOK_PATH")
+    @classmethod
+    def _validate_webhook_path(cls, value: str) -> str:
+        """Webhook path majburan `/` bilan boshlanishi kerakligini ta'minlaydi."""
+        if not value.startswith("/"):
+            return f"/{value}"
+        return value
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """
+    Singleton factory: `Settings` obyektini bir marta yaratadi va keshlaydi.
+
+    lru_cache(maxsize=1) tufayli bir nechta chaqiruv ham doim bitta obyekt qaytaradi.
+    """
+    return Settings()  # type: ignore[call-arg]
+
+
+# Butun loyiha bo'ylab ishlatiladigan bitta singleton obyekt.
+# import qilish: from config.settings import settings
+settings = get_settings()

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Environment va maxfiy fayllar (hech qachon commit qilinmaydi)
+.env
+.env.local
+
+# Lokal test artefactlari
+_local_pkgs/
+*.sqlite3
+*.sqlite3-journal
+
+# IDE / tizim
+.idea/
+.vscode/
+.DS_Store
