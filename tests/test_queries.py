@@ -40,6 +40,7 @@ conn_mod._session_factory = async_sessionmaker(
 from database.models import AntiFraudLog, Base, Product, Referral, Transaction, User, Withdrawal  # noqa: E402
 from database.queries import (  # noqa: E402
     ORDER_PAID,
+    PAYMENT_BALANCE,
     PAYMENT_XTR,
     WITHDRAWAL_APPROVED,
     WITHDRAWAL_REJECTED,
@@ -290,6 +291,50 @@ async def main() -> None:
     top2 = await ReferralRepository.get_top_referrers(limit=2)
     ok("limit ishlaydi", len(top2) == 2 and top2[0].user_id == 2003)
     ok("top'da username/first_name", top[0].username == "top2003" and top[0].first_name == "Top")
+
+    print("== 10. get_product_by_id / get_order / create_balance_order ==")
+    async with conn_mod._session_factory() as s:
+        async with s.begin():
+            pbal = Product(category="stars", title="50 Stars balans", price_xtr=50)
+            poff = Product(category="gift", title="O'chiq gift", price_xtr=10, is_active=False)
+            s.add_all([pbal, poff])
+            await s.flush()
+            bal_id, off_id = pbal.id, poff.id
+    got = await ProductRepository.get_product_by_id(bal_id)
+    ok("get_product_by_id (faol)", got is not None and got.title == "50 Stars balans")
+    ok("get_product_by_id (o'chirilgan) ham qaytadi",
+       (await ProductRepository.get_product_by_id(off_id)) is not None)
+    ok("get_product_by_id (yo'q) -> None", await ProductRepository.get_product_by_id(99999) is None)
+
+    await UserRepository.get_or_create_user(1006, "bal_buyer", "BalBuyer", None)
+    await UserRepository.update_balance(1006, 80, "deposit", "topup")
+    bo = await OrderRepository.create_balance_order(1006, bal_id)
+    ok("balance order darhol paid", bo.status == ORDER_PAID and bo.paid_at is not None)
+    ok("charge_id None (ichki to'lov)", bo.telegram_payment_charge_id is None)
+    ok("payment_method=balance", bo.payment_method == PAYMENT_BALANCE)
+    ok("balans 80-50=30", (await UserRepository.get_user(1006)).stars_balance == 30)
+    rows = await q("SELECT count(*) FROM transactions WHERE user_id=1006 AND tx_type='purchase' AND amount=-50")
+    ok("purchase audit yozuvi", rows[0][0] == 1)
+    o = await OrderRepository.get_order(bo.id)
+    ok("get_order", o is not None and o.status == ORDER_PAID)
+    ok("get_order (yo'q) -> None", await OrderRepository.get_order(99999) is None)
+    try:
+        await OrderRepository.create_balance_order(1006, gift_id)  # 50 XTR, balans 30
+        raise SystemExit("InsufficientBalanceError kutilgan")
+    except InsufficientBalanceError:
+        ok("balans yetarli emas -> xato", (await UserRepository.get_user(1006)).stars_balance == 30)
+    rows = await q("SELECT count(*) FROM orders WHERE user_id=1006")
+    ok("muvaffaqiyatsiz xarid buyurtma yaratmaydi", rows[0][0] == 1)
+    try:
+        await OrderRepository.create_balance_order(1006, off_id)
+        raise SystemExit("RepositoryError kutilgan")
+    except RepositoryError:
+        ok("o'chirilgan mahsulot -> xato", True)
+    try:
+        await OrderRepository.create_balance_order(88888, bal_id)
+        raise SystemExit("RepositoryError kutilgan")
+    except RepositoryError:
+        ok("mavjud bo'lmagan foydalanuvchi -> xato", True)
 
     print(f"\nBARCHA TESTLAR O'TDI: {PASSED} ta tekshiruv")
 

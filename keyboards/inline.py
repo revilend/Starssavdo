@@ -13,7 +13,9 @@ Callback konventsiyalar (handlerlar uchun):
  - check_subscription     — kanal a'zoligini tekshirish
  - cat_{category}         — do'kon toifasi (stars/premium/nft/gift)
  - shop_categories        — toifalarga qaytish
- - buy_prod_{product_id}  — mahsulot xaridi
+ - buy_prod_{product_id}  — mahsulot xaridi (usul tanlash)
+ - pay_xtr_{product_id}   — rasmiy Telegram Stars (XTR) bilan to'lov
+ - pay_balance_{product_id} — bot balansidan xarid
  - top_referrers          — top taklif qiluvchilar reytingi
  - withdraw_start         — yechib olishni boshlash
  - tx_history             — tranzaksiya tarixi
@@ -40,6 +42,11 @@ CB_SHOP_CATEGORIES = "shop_categories"
 CB_TOP_REFERRERS = "top_referrers"
 CB_WITHDRAW_START = "withdraw_start"
 CB_TX_HISTORY = "tx_history"
+
+# Xarid callback prefikslari (handlerlar `F.data.startswith(...)` bilan tutadi)
+CB_BUY_PRODUCT_PREFIX = "buy_prod_"
+CB_PAY_XTR_PREFIX = "pay_xtr_"
+CB_PAY_BALANCE_PREFIX = "pay_balance_"
 
 BACK_BTN_TEXT = "◀️ Orqaga"
 MENU_BTN_TEXT = "◀️ Bosh menyu"
@@ -179,6 +186,33 @@ def get_products_list_kb(
             text="◀️ Toifalarga qaytish",
             callback_data=CB_SHOP_CATEGORIES,
         )
+    )
+    return builder.as_markup()
+
+
+# =============================================================
+# 3.1. DO'KON — XARID USULINI TANLASH
+# =============================================================
+def get_payment_methods_kb(product_id: int) -> InlineKeyboardMarkup:
+    """
+    Xarid usulini tanlash klaviaturasi (mahsulot tafsilotlari ostida):
+
+        [ ⭐️ Rasmiy Telegram Stars (XTR) bilan to'lash ]  (pay_xtr_{id})
+        [ 💳 Botdagi balansimdan yechish ]                (pay_balance_{id})
+        [ ◀️ Orqaga ]                                      (shop_categories)
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="⭐️ Rasmiy Telegram Stars (XTR) bilan to'lash",
+        callback_data=f"{CB_PAY_XTR_PREFIX}{product_id}",
+    )
+    builder.button(
+        text="💳 Botdagi balansimdan yechish",
+        callback_data=f"{CB_PAY_BALANCE_PREFIX}{product_id}",
+    )
+    builder.adjust(1)  # usullar vertikal — bosish qulay
+    builder.row(
+        InlineKeyboardButton(text=BACK_BTN_TEXT, callback_data=CB_SHOP_CATEGORIES)
     )
     return builder.as_markup()
 

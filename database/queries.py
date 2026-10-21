@@ -859,6 +859,21 @@ class ProductRepository:
             )
             return list(result.scalars().all())
 
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_product_by_id(product_id: int) -> Product | None:
+        """
+        Bitta mahsulotni ID bo'yicha oladi.
+
+        Faollik (`is_active`) BU yerda tekshirilmaydi — xarid qilinadigan
+        daqiqada `create_order` / `create_balance_order` qayta tekshiradi
+        (o'chirilgan mahsulot uchun buyurtma yaratilmaydi).
+
+        Returns: Product | None (topilmagan bo'lsa None).
+        """
+        async with get_session() as session:
+            return await session.get(Product, product_id)
+
 
 # =============================================================
 # 5. ORDER REPOSITORY
@@ -945,6 +960,88 @@ class OrderRepository:
             await session.flush()
             logger.info(
                 "Buyurtma to'landi: id=%s charge_id=%s", order_id, telegram_payment_charge_id
+            )
+            return order
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_order(order_id: int) -> Order | None:
+        """
+        Buyurtmani ID bo'yicha oladi (pre_checkout tekshiruvi uchun).
+
+        Returns: Order | None (topilmagan bo'lsa None).
+        """
+        async with get_session() as session:
+            return await session.get(Order, order_id)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def create_balance_order(user_id: int, product_id: int) -> Order:
+        """
+        Bot balansi orqali ATOMIK xarid (bitta tranzaksiya ichida):
+          1. Foydalanuvchi qatori FOR UPDATE bilan qulflanadi.
+          2. Mahsulot tekshiriladi (topilmagan/o'chirilgan -> RepositoryError).
+          3. Balans yetarliligi tekshiriladi — yetmasa
+             `InsufficientBalanceError` -> ROLLBACK (na buyurtma, na balans
+             o'zgaradi — xavfsiz).
+          4. Buyurtma yaratiladi va darhol `paid` qilinadi
+             (telegram_payment_charge_id None — ichki to'lov).
+          5. Balansdan ayriladi + transactions'ga `purchase` audit yoziladi.
+
+        Parallel himoya: qator qulfi tufayli bir vaqtli ikki xariddan
+        biri navbat kutadi va balans yetarliligini yangi qiymat bilan
+        qayta tekshiradi (race yo'q).
+
+        Raises:
+            RepositoryError: foydalanuvchi yoki mahsulot topilmadi/o'chirilgan.
+            InsufficientBalanceError: balans yetarli emas.
+        """
+        async with get_session() as session:
+            user = await session.get(User, user_id, with_for_update=True)
+            if user is None:
+                raise RepositoryError(f"Foydalanuvchi {user_id} topilmadi")
+
+            product = await session.get(Product, product_id, with_for_update=True)
+            if product is None or not product.is_active:
+                raise RepositoryError(
+                    f"Mahsulot {product_id} topilmadi yoki o'chirilgan"
+                )
+
+            if user.stars_balance < product.price_xtr:
+                raise InsufficientBalanceError(
+                    f"Balans yetarli emas: joriy={user.stars_balance}, "
+                    f"narx={product.price_xtr}"
+                )
+
+            order = Order(
+                user_id=user_id,
+                product_id=product_id,
+                payment_method=PAYMENT_BALANCE,
+                amount_xtr=product.price_xtr,
+                status=ORDER_PAID,
+                paid_at=utcnow(),
+                order_data={
+                    "product_title": product.title,
+                    "category": product.category,
+                },
+            )
+            session.add(order)
+            await session.flush()  # order.id olish uchun
+
+            user.stars_balance -= product.price_xtr
+            session.add(
+                TransactionRow(
+                    user_id=user_id,
+                    amount=-product.price_xtr,
+                    tx_type=TX_PURCHASE,
+                    description=f"Balansdan xarid: {product.title}",
+                    reference_id=str(order.id),
+                )
+            )
+            await session.flush()
+            logger.info(
+                "Balans orqali xarid: order=%s user=%s product=%s -%sXTR",
+                order.id, user_id, product_id, product.price_xtr,
             )
             return order
 
