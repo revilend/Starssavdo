@@ -2,54 +2,62 @@
 main.py
 =======
 Telegram Stars, NFT, Premium, Mayda Giftlar va Referal boti (@nftyutbot)
-— asosiy kirish nuqtasi (Render.com da 24/7 ishga tushirish uchun).
+— Render.com da 24/7 ishlaydigan **webhook** kirish nuqtasi (FastAPI).
 
-Tartib:
- 1. Logging sozlanadi (INFO darajasi).
- 2. Bot + Dispatcher yaratiladi:
-      - `DefaultBotProperties(parse_mode=ParseMode.HTML)` — barcha
-        xabarlar standart HTML formatida (handlerlarda qayta yozish shart emas).
-      - `MemoryStorage` — FSM holatlari (kanal qo'shish, rassilka,
-        sozlamalar, balans, payout).
- 3. Health check serveri ishga tushadi (Render uchun):
-      - Render "Free Web Service" dastur doimiy HTTP portni ochiq
-        ushlab turishni talab qiladi — aks holda service "not listening"
-        deb to'xtatiladi.
-      - `aiohttp.web` asosida yengil server: `/` va `/health` manzillari
-        `200 OK` + `{"status": "ok", "bot": "@nftyutbot"}` javobini beradi
-        (UptimeRobot har 5 daqiqada ping yuboradi).
-      - Server `host="0.0.0.0"`, `port=int(os.getenv("PORT", 8080))` da
-        ishga tushadi va polling bilan **parallel** ravishda ishlaydi.
- 4. Database ulanishi tekshiriladi (`test_connection()`) — muvaffaqiyatsiz
-    bo'lsa dastur ishga tushmaydi (xatoni erta aniqlanadi).
- 5. Middlewarelar (outer, tartib muhim):
-      1) ThrottlingMiddleware — spam/flood himoyasi (adminlar bundan mustasno)
-      2) SubscriptionMiddleware — majburiy homiy kanallar tekshiruvi
- 6. Routerlar tartib bilan ulanadi:
-      admin routers -> subscription router -> start & referral routers
-      -> shop & payout routers
-    (admin routerlar birinchi — ularning callback'lari user handlerlarga
-    tushib qolmasligi uchun; subscription esa barcha user hodisalaridan
-    oldin o'tadi).
- 7. `dp.start_polling(bot)` — 24/7 polling; SIGINT/SIGTERM (Ctrl+C yoki
-    Render deploy/restart) toza yopilishni ta'minlaydi (veb-server,
-    Supabase connection pool va bot session xavfsiz yopiladi).
+Arxitektura:
+ - `FastAPI` ilova `uvicorn` orqali `0.0.0.0:$PORT` da ishlaydi
+   (Render start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`).
+ - `lifespan` (startup/shutdown) boshqaradi:
+     1) Supabase (PostgreSQL) ulanishini tekshiradi (`test_connection()`);
+        muvaffaqiyatsiz bo'lsa ilova ishga tushmaydi (xato erta aniqlanadi).
+     2) Webhook rejimida: `set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+        drop_pending_updates=True, secret_token=WEBHOOK_SECRET,
+        allowed_updates=...)`.
+     3) Polling rejimida (`BOT_MODE=polling` — lokal ishlash uchun):
+        webhook o'chiriladi va `dp.start_polling()` fon vazifasi sifatida
+        ishga tushadi.
+     4) To'xtaganda: webhook o'chiriladi (yoki polling to'xtatiladi),
+        DB pool (`close_connection()`) va bot session yopiladi.
+ - Endpointlar:
+     | Manzil   | Javob                                              |
+     |----------|----------------------------------------------------|
+     | GET /    | 200 — {"status": "ok", "bot": "@nftyutbot"}         |
+     | GET /health | 200 — {"status": "ok", "bot": "@nftyutbot"}       |
+     | POST /webhook | 200 — Telegram update Dispatcher'ga uzatiladi |
+   `/` va `/health` — Render health check + UptimeRobot keep-alive uchun.
+ - `/webhook` `X-Telegram-Bot-Api-Secret-Token` sarlavhasini tekshiradi
+   (agar `WEBHOOK_SECRET` o'rnatilgan bo'lsa). Noto'g'ri token -> 403,
+   buzilgan JSON -> 400, handlerdagi kutilmagan xato -> 500 (Telegram
+   qayta yuboradi; buyurtma/referal operatsiyalari idempotent).
+ - Routerlar tartibi: admin routers -> subscription -> start & referral
+   -> shop & payout. Middlewarelar: Throttling -> Subscription.
+ - Bitta worker (uvicorn default) ishlatiladi: FSM `MemoryStorage` va
+   ichki TTL keshlar jarayon ichida, shuning uchun `--workers > 1` tavsiya
+   etilmaydi.
 
 Ishga tushirish:
-    python main.py
+    python main.py                                  # lokal (uvicorn ichida)
+    uvicorn main:app --host 0.0.0.0 --port $PORT    # Render (webhook)
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
+from contextlib import asynccontextmanager, suppress
+from typing import Annotated, AsyncIterator
 
-from aiohttp import web
+import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Update
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from config.settings import settings
 
@@ -85,16 +93,19 @@ from database.connection import close_connection, test_connection
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------
-# 5. Health check serveri (Render)
+# 5. Health check (Render + UptimeRobot)
 # -------------------------------------------------------------
 # Bot nomi — health check javobida qaytariladi.
 HEALTH_BOT_USERNAME = "@nftyutbot"
 
-# Health check javobining tanasi (Render + UptimeRobot uchun).
+# Health check javobining tanasi.
 HEALTH_PAYLOAD: dict[str, str] = {"status": "ok", "bot": HEALTH_BOT_USERNAME}
 
 # Render port berilmagan holatda ishlatiladigan standart port.
 DEFAULT_PORT = 8080
+
+# Telegram secret_token sarlavhasi (Telegram Bot API tomonidan yuboriladi).
+SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 
 def setup_logging() -> None:
@@ -146,25 +157,9 @@ def create_dispatcher() -> Dispatcher:
     return dp
 
 
-# -------------------------------------------------------------
-# Health check serveri
-# -------------------------------------------------------------
-async def health_handler(request: web.Request) -> web.Response:
-    """
-    Health check so'rovi.
-
-    Render va UptimeRobot shu manzilga ping yuboradi — bot ishlayotgan
-    holatda doimiy `200 OK` va JSON javob qaytariladi.
-    """
-    return web.json_response(HEALTH_PAYLOAD, status=200)
-
-
-def create_health_app() -> web.Application:
-    """Health check uchun minimal aiohttp ilovasi (`/` va `/health`)."""
-    app = web.Application()
-    app.router.add_get("/", health_handler)
-    app.router.add_get("/health", health_handler)
-    return app
+# Bot va Dispatcher bitta jarayonda (uvicorn worker) — bitta nusxa.
+bot: Bot = create_bot()
+dp: Dispatcher = create_dispatcher()
 
 
 def resolve_port() -> int:
@@ -187,143 +182,236 @@ def resolve_port() -> int:
     return port
 
 
-class HealthServer:
+def webhook_endpoint_url() -> str:
     """
-    Render uchun yengil HTTP server.
+    To'liq webhook manzilini qaytaradi: `{WEBHOOK_URL}{WEBHOOK_PATH}`.
 
-    Vazifasi — Render "Free Web Service" talabini bajarish: dastur
-    `0.0.0.0:PORT` manzilida HTTP portini ochiq ushlab turadi va
-    health check so'rovlariga `200 OK` javob beradi.
-
-    Server `start()` dan keyin event loop ichida **fon rejimida** ishlaydi
-    va polling (`dp.start_polling`) bilan parallel ravishda javob beradi.
+    `WEBHOOK_URL` oxiridagi `/` settings validatori tomonidan olib tashlangan.
+    Raises:
+        RuntimeError: `BOT_MODE=webhook` bo'lib, `WEBHOOK_URL` bo'sh bo'lsa.
     """
+    base = (settings.WEBHOOK_URL or "").rstrip("/")
+    if not base:
+        raise RuntimeError(
+            "WEBHOOK_URL bo'sh! Render'da https://<service>.onrender.com ni "
+            "kiriting yoki lokal ishlash uchun BOT_MODE=polling qo'ying."
+        )
+    return f"{base}{settings.WEBHOOK_PATH}"
 
-    def __init__(self, port: int, host: str = "0.0.0.0") -> None:
-        self.host = host
-        self.port = port
-        self._runner: web.AppRunner | None = None
-        self._stopped = asyncio.Event()
 
-    async def start(self) -> None:
-        """Portni ochadi (Render shundan keyin service'ni "listening" deb hisoblaydi)."""
-        app = create_health_app()
-        runner = web.AppRunner(app, access_log=None)
-        await runner.setup()
-        site = web.TCPSite(runner, host=self.host, port=self.port)
-        await site.start()
-        self._runner = runner
-        logger.info(
-            "Health check server %s:%s da ishga tushdi (/ va /health -> 200 OK).",
-            self.host,
-            self.port,
+# -------------------------------------------------------------
+# Startup / shutdown
+# -------------------------------------------------------------
+async def _start_webhook() -> None:
+    """Telegram webhookini o'rnatadi (Render https manzili bilan)."""
+    url = webhook_endpoint_url()
+    await bot.set_webhook(
+        url=url,
+        drop_pending_updates=True,
+        secret_token=settings.WEBHOOK_SECRET or None,
+        allowed_updates=dp.resolve_used_update_types(),
+    )
+    logger.info(
+        "Webhook o'rnatildi: %s (secret_token=%s, allowed_updates=%s)",
+        url,
+        "ha" if settings.WEBHOOK_SECRET else "yo'q",
+        dp.resolve_used_update_types(),
+    )
+    if not settings.WEBHOOK_SECRET:
+        logger.warning(
+            "WEBHOOK_SECRET bo'sh — /webhook endpointi imzosiz so'rovlarni ham "
+            "qabul qiladi. Production'da secret o'rnatish tavsiya etiladi."
         )
 
-    async def serve(self) -> None:
-        """Fon vazifasi — server to'xtatilguncha kutadi."""
-        await self._stopped.wait()
 
-    async def stop(self) -> None:
-        """Serverni xavfsiz to'xtatadi (shutdown da chaqiriladi)."""
-        self._stopped.set()
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
-            logger.info("Health check server to'xtatildi.")
+def _log_polling_failure(task: asyncio.Task[None]) -> None:
+    """Polling vazifasi kutilmaganda to'xtasa — sababini logga yozadi."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Polling to'xtab qoldi: %s", exc, exc_info=exc)
 
 
-async def on_startup(bot: Bot) -> None:
-    """Ishga tushishdagi tekshiruvlar: DB ulanishi va webhook tozalash."""
-    # 1) Database ulanishini tekshirish
-    if not await test_connection():
-        logger.error("PostgreSQL bazasiga ulanib bo'lmadi!")
-        raise SystemExit("Bazaga ulanib bo'lmadi — .env ni tekshiring.")
+async def _start_polling() -> asyncio.Task[None]:
+    """
+    Polling rejimini (lokal ishlash uchun) fon vazifasi sifatida boshlaydi.
 
-    # 2) Eski webhook va kutayotgan yangilanishlarni tozalash (polling uchun)
+    Signal boshqaruvi uvicorn'ga qoldiriladi (`handle_signals=False`) —
+    SIGTERM kelganda uvicorn lifespan shutdown'ni ishga tushiradi va
+    vazifa bekor qilinadi.
+    """
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Webhook tozalandi — polling rejimi tayyor.")
+    task = asyncio.create_task(
+        dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
+            handle_signals=False,
+            close_bot_session=False,
+        ),
+        name="telegram-polling",
+    )
+    task.add_done_callback(_log_polling_failure)
+    logger.info("Polling rejimi boshlandi (BOT_MODE=polling).")
+    return task
 
 
-async def on_shutdown(bot: Bot, health: HealthServer | None = None) -> None:
-    """Toza yopish: veb-server, DB pool va bot session."""
+async def _shutdown(polling_task: asyncio.Task[None] | None) -> None:
+    """Toza yopish: polling/webhook, DB pool va bot session."""
     logger.info("Bot yopilmoqda…")
 
-    # 1) Health check serverini to'xtatish (yangi so'rovlar qabul qilinmasin)
-    if health is not None:
-        await health.stop()
+    if polling_task is not None:
+        polling_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await polling_task
+    else:
+        try:
+            await bot.delete_webhook(drop_pending_updates=False)
+            logger.info("Webhook o'chirildi.")
+        except Exception:  # noqa: BLE001 — yopishda xato dasturni sindirmasin
+            logger.warning("Webhookni o'chirib bo'lmadi (tarmoq xatosi?).")
 
-    # 2) Supabase connection poolni yopish
+    # Supabase connection poolni yopish
     await close_connection()
 
-    # 3) Bot sessionni yopish
+    # Bot sessionni yopish
     await bot.session.close()
 
     logger.info("Barcha ulanishlar yopildi. Xayr!")
 
 
-async def run() -> None:
-    """Asosiy sikl: yaratish -> ulash -> polling (24/7) -> toza yopish."""
-    setup_logging()
-    logger.info("Bot ishga tushmoqda… adminlar: %s", settings.ADMIN_IDS)
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """
+    Ilova hayot sikli: DB tekshiruvi -> webhook/polling -> toza yopish.
 
-    bot = create_bot()
-    dp = create_dispatcher()
-    health = HealthServer(port=resolve_port())
+    Startup'da xato bo'lsa (masalan, baza yo'q) ilova ishga tushmaydi —
+    Render deploy muvaffaqiyatsiz deb belgilanadi va muammo logda ko'rinadi.
+    """
+    setup_logging()
+    logger.info(
+        "Bot ishga tushmoqda… rejim=%s adminlar=%s",
+        settings.BOT_MODE,
+        settings.ADMIN_IDS,
+    )
 
     polling_task: asyncio.Task[None] | None = None
-    health_task: asyncio.Task[None] | None = None
-
     try:
-        # 1) Render portini ochamiz — health check 200 qaytarishi kerak
-        await health.start()
-        health_task = asyncio.create_task(health.serve(), name="health-server")
+        # 1) Database ulanishini tekshirish (majburiy)
+        if not await test_connection():
+            raise RuntimeError(
+                "PostgreSQL bazasiga ulanib bo'lmadi — DATABASE_URL va DB_SSL "
+                "qiymatlarini tekshiring."
+            )
 
-        # 2) DB ulanishi + webhook tozalash
-        await on_startup(bot)
+        # 2) Tanlangan rejimni ishga tushirish
+        if settings.BOT_MODE == "polling":
+            polling_task = await _start_polling()
+        else:
+            await _start_webhook()
 
-        # 3) Polling — health server bilan parallel ravishda ishlaydi
-        polling_task = asyncio.create_task(
-            dp.start_polling(
-                bot,
-                allowed_updates=dp.resolve_used_update_types(),
-                handle_signals=True,
-            ),
-            name="polling",
-        )
-
-        # 4) Ikkalasi ham to'xtaguncha kutamiz (Render restart / SIGTERM)
-        done, _pending = await asyncio.wait(
-            {polling_task, health_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in done:
-            exc = task.exception()
-            if exc is not None:
-                raise exc
-
+        yield
     finally:
-        # Polling va health tasklarini to'xtatamiz (DB yopilishidan OLDIN)
-        for task in (polling_task, health_task):
-            if task is not None and not task.done():
-                task.cancel()
-
-        await asyncio.gather(
-            *(task for task in (polling_task, health_task) if task is not None),
-            return_exceptions=True,
-        )
-
-        # Veb-server + DB pool + bot sessionni xavfsiz yopamiz
-        await on_shutdown(bot, health)
+        await _shutdown(polling_task)
 
 
-def main() -> None:
-    """Sinxron kirish nuqtasi: `python main.py`."""
+# -------------------------------------------------------------
+# FastAPI ilovasi
+# -------------------------------------------------------------
+app = FastAPI(
+    title="nftyutbot",
+    description="Telegram Stars / NFT / Premium boti — webhook server",
+    lifespan=lifespan,
+    # Hujjatlar ommaviy emas (production xavfsizligi uchun o'chirilgan)
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/health", include_in_schema=False)
+async def health_handler() -> dict[str, str]:
+    """
+    Health check: Render va UptimeRobot shu manzilga ping yuboradi.
+
+    Bot jarayoni ishlayotgan bo'lsa doimiy `200 OK` + JSON qaytariladi.
+    """
+    return HEALTH_PAYLOAD
+
+
+@app.post(settings.WEBHOOK_PATH, include_in_schema=False)
+async def telegram_webhook(
+    request: Request,
+    secret_token: Annotated[
+        str | None, Header(alias=SECRET_TOKEN_HEADER)
+    ] = None,
+) -> JSONResponse:
+    """
+    Telegram update'larini qabul qiladi va Dispatcher'ga uzatadi.
+
+    Xavfsizlik:
+      - `WEBHOOK_SECRET` o'rnatilgan bo'lsa, `X-Telegram-Bot-Api-Secret-Token`
+        sarlavhasi doimiy vaqtda (hmac.compare_digest) solishtiriladi.
+        Mos kelmasa — 403.
+      - Buzilgan JSON yoki noto'g'ri Update — 400.
+      - Handlerdagi kutilmagan xato — 500 (Telegram qayta yuboradi;
+        buyurtmalar/referal mukofotlari idempotent).
+    """
+    expected = settings.WEBHOOK_SECRET
+    if expected and not hmac.compare_digest(secret_token or "", expected):
+        client = request.client.host if request.client else "?"
+        logger.warning("Webhook: noto'g'ri secret token (client=%s)", client)
+        raise HTTPException(status_code=403, detail="forbidden")
+
     try:
-        asyncio.run(run())
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 — buzilgan JSON
+        logger.warning("Webhook: JSON o'qib bo'lmadi")
+        raise HTTPException(status_code=400, detail="invalid json") from None
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid update")
+
+    try:
+        update = Update.model_validate(payload, context={"bot": bot})
+    except ValidationError as exc:
+        logger.warning("Webhook: noto'g'ri update — %s", exc)
+        raise HTTPException(status_code=400, detail="invalid update") from None
+
+    try:
+        await dp.feed_webhook_update(bot, update)
+    except Exception:  # noqa: BLE001 — 500 -> Telegram qayta yuboradi
+        logger.exception("Update #%s ni qayta ishlashda xatolik", update.update_id)
+        return JSONResponse({"ok": False}, status_code=500)
+
+    return JSONResponse({"ok": True}, status_code=200)
+
+
+# -------------------------------------------------------------
+# `python main.py` — uvicorn'ni shu jarayonda ishga tushirish
+# -------------------------------------------------------------
+def main() -> None:
+    """
+    Sinxron kirish nuqtasi.
+
+    Render uchun tavsiya etilgan start command — to'g'ridan-to'g'ri
+    `uvicorn main:app --host 0.0.0.0 --port $PORT`; bu funksiya esa
+    lokal `python main.py` uchun qulaylik.
+    """
+    setup_logging()
+    port = resolve_port()
+    try:
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+            log_config=None,  # logging.basicConfig sozlamalarini saqlaymiz
+            proxy_headers=True,
+        )
     except KeyboardInterrupt:
         logger.info("Dastur to'xtatildi (Ctrl+C).")
-    # SystemExit (masalan, bazaga ulanib bo'lmasa) ataylab chiqadi —
-    # Render loglarida xato ko'rinishi va xato kodi bilan tugashi uchun.
 
 
 if __name__ == "__main__":

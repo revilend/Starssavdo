@@ -1,17 +1,18 @@
 # =============================================================
-# Render Blueprint — @nftyutbot
+# Render Blueprint — @nftyutbot (FastAPI webhook, 24/7)
 # =============================================================
 # Ishga tushirish:
 #   1) Render Dashboard -> "New" -> "Blueprint"
 #   2) Repozitoriy: https://github.com/revilend/Starssavdo
 #   3) "sync: false" deb belgilangan o'zgaruvchilarni (BOT_TOKEN,
-#      ADMIN_IDS, DATABASE_URL) dashboard orqali qo'lda kiritasiz.
+#      ADMIN_IDS, DATABASE_URL, WEBHOOK_URL, WEBHOOK_SECRET)
+#      dashboard orqali qo'lda kiritasiz.
 #
-# Bot Render'da doimiy ishlashi uchun:
-#   - "Free" web service portni ochib turishni talab qiladi — buni
-#     `main.py` dagi health check serveri (`/` va `/health` -> 200 OK)
-#     bajaradi.
-#   - `healthCheckPath` orqali Render ham har daqiqada o'zini tekshiradi.
+# Bot webhook rejimida ishlaydi:
+#   - uvicorn `0.0.0.0:$PORT` da FastAPI ilovasini ko'taradi;
+#   - `/` va `/health` -> 200 OK (Render health check + UptimeRobot);
+#   - Telegram update'lari `/webhook` endpointiga keladi;
+#   - PORT'ni Render o'zi beradi — qo'lda yozish shart emas.
 # =============================================================
 services:
   - type: web
@@ -19,7 +20,9 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    # Webhook rejimi: FastAPI ilovasi (main.py ichidagi `app`)
+    # Bitta worker — FSM MemoryStorage va TTL keshlar jarayon ichida.
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: false
     envVars:
@@ -32,6 +35,15 @@ services:
       # Supabase connection string (Transaction Pooler: port 6543)
       - key: DATABASE_URL
         sync: false
+      # Render bergan https manzil: https://<service>.onrender.com
+      - key: WEBHOOK_URL
+        sync: false
+      # Telegram secret_token (A-Za-z0-9_- ; masalan: openssl rand -hex 32)
+      - key: WEBHOOK_SECRET
+        sync: false
+      # Ish rejimi: webhook (Render) yoki polling (lokal)
+      - key: BOT_MODE
+        value: webhook
       # Render Python versiyasi
       - key: PYTHON_VERSION
         value: 3.11.9

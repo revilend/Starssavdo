@@ -16,6 +16,7 @@ Ishlatish:
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 from typing import Annotated
@@ -87,14 +88,33 @@ class Settings(BaseSettings):
     )
 
     # ------------------------- Webhook / Server -----------------
+    BOT_MODE: str = Field(
+        default="webhook",
+        description=(
+            "Ish rejimi: 'webhook' (Render/production — FastAPI) yoki "
+            "'polling' (lokal ishlash uchun, webhook URL talab qilmaydi)"
+        ),
+    )
+
     WEBHOOK_URL: str = Field(
         default="",
-        description="Telegram webhook manzili (masalan, https://bot.onrender.com)",
+        description=(
+            "Telegram webhook manzili (masalan, https://bot.onrender.com). "
+            "BOT_MODE=webhook bo'lganda majburiy."
+        ),
     )
 
     WEBHOOK_PATH: str = Field(
         default="/webhook",
         description="Webhook endpoint path'i",
+    )
+
+    WEBHOOK_SECRET: str = Field(
+        default="",
+        description=(
+            "Telegram secret_token: webhook so'rovlari shu sarlavha bilan "
+            "imzolanadi (ixtiyoriy, lekin production'da tavsiya etiladi)"
+        ),
     )
 
     PORT: int = Field(
@@ -145,6 +165,46 @@ class Settings(BaseSettings):
         if not value.startswith("/"):
             return f"/{value}"
         return value
+
+    @field_validator("BOT_MODE")
+    @classmethod
+    def _validate_bot_mode(cls, value: str) -> str:
+        """`BOT_MODE` faqat `webhook` yoki `polling` bo'lishi mumkin."""
+        mode = (value or "").strip().lower()
+        if mode not in {"webhook", "polling"}:
+            raise ValueError(
+                f"BOT_MODE noto'g'ri: {value!r}. 'webhook' yoki 'polling' kutilmoqda."
+            )
+        return mode
+
+    @field_validator("WEBHOOK_URL")
+    @classmethod
+    def _normalize_webhook_url(cls, value: str) -> str:
+        """
+        Webhook URL oxiridagi `/` ni olib tashlaydi (path bilan qo'shilganda
+        `//webhook` hosil bo'lmasligi uchun) va formatini tekshiradi.
+        """
+        url = (value or "").strip().rstrip("/")
+        if url and not url.startswith(("https://", "http://")):
+            raise ValueError(
+                "WEBHOOK_URL http:// yoki https:// bilan boshlanishi kerak "
+                f"(olingan: {url!r})."
+            )
+        return url
+
+    @field_validator("WEBHOOK_SECRET")
+    @classmethod
+    def _validate_webhook_secret(cls, value: str) -> str:
+        """Telegram secret_token talabi: 1-256 belgi, A-Za-z0-9_- dan iborat."""
+        secret = (value or "").strip()
+        if not secret:
+            return ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", secret):
+            raise ValueError(
+                "WEBHOOK_SECRET faqat A-Za-z0-9_- belgilaridan iborat bo'lishi "
+                "va 1-256 belgi oralig'ida bo'lishi kerak."
+            )
+        return secret
 
 
 @lru_cache(maxsize=1)
