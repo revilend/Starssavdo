@@ -4,6 +4,8 @@ middlewares/subscription.py
 Majburiy kanallar (OP) tekshiruvchi middleware — aiogram 3.x BaseMiddleware.
 
 Qoidalari:
+ 0. To'lov hodisalari (`pre_checkout_query`, `message.successful_payment`)
+    TEKSHIRUVSIZ o'tkaziladi — pul hech qachon bloklanmaydi.
  1. Admin (`settings.ADMIN_IDS`) — tekshiruvsiz o'tadi.
  2. `check_subscription` callback'i — bloklanmaydi (aynan shu tugma
     qayta tekshiruv uchun ishlatiladi).
@@ -14,7 +16,13 @@ Qoidalari:
     a'zolik holati esa 120 soniya keshlanadi — Telegram API limiti
     (TooManyRequests) xavfi yo'q.
 
-Ulashish (bot.py da):
+Muhim: middleware `dp.update.outer_middleware(...)` orqali ulanadi, ya'ni
+`event` — `Update`. Shuning uchun ichidagi haqiqiy hodisa
+(`message` / `callback_query`) `_unwrap_event()` bilan ajratib olinadi;
+aks holda `isinstance(event, CallbackQuery)` hech qachon bajarilmaydi va
+a'zo bo'lmagan foydalanuvchi hech qanday javob olmay qoladi.
+
+Ulashish (main.py da):
     from middlewares.subscription import SubscriptionMiddleware
 
     dp.update.outer_middleware(SubscriptionMiddleware())
@@ -28,7 +36,14 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    InaccessibleMessage,
+    Message,
+    PreCheckoutQuery,
+    TelegramObject,
+    Update,
+)
 
 from config.settings import settings
 from keyboards.inline import CB_CHECK_SUBSCRIPTION, get_subscription_kb
@@ -45,13 +60,71 @@ SUBSCRIPTION_PROMPT_TEXT = (
     "homiy kanallarga a'zo bo'ling:</b>"
 )
 
+# `Update` ichidan qidiriladigan hodisa maydonlari (tartib muhim)
+_UPDATE_FIELDS: tuple[str, ...] = (
+    "message",
+    "callback_query",
+    "edited_message",
+    "business_message",
+    "edited_business_message",
+    "pre_checkout_query",
+)
+
+
+def _unwrap_event(event: TelegramObject) -> TelegramObject | None:
+    """
+    `Update` bo'lsa ichidagi haqiqiy hodisani qaytaradi.
+
+    Boshqa turdagi hodisalar (Message, CallbackQuery, ...) o'zgarishsiz
+    qaytadi. `Update` ichida tanilgan hodisa bo'lmasa — `None`.
+    """
+    if not isinstance(event, Update):
+        return event
+
+    for field in _UPDATE_FIELDS:
+        inner = getattr(event, field, None)
+        if inner is not None:
+            return inner
+
+    return None
+
+
+def _is_payment_event(event: TelegramObject) -> bool:
+    """
+    To'lov bilan bog'liq hodisami?
+
+    - `pre_checkout_query` — Telegram to'lovni tasdiqlashni so'raydi
+      (10 soniya ichida javob berilmasa to'lov bekor bo'ladi);
+    - `message.successful_payment` — to'lov muvaffaqiyatli yakunlandi.
+
+    Bu hodisalar obuna tekshiruvi bilan hech qachon to'silmasligi kerak.
+    """
+    if isinstance(event, PreCheckoutQuery):
+        return True
+
+    if isinstance(event, Update):
+        if event.pre_checkout_query is not None:
+            return True
+        message = event.message or event.edited_message
+        return bool(message is not None and message.successful_payment is not None)
+
+    if isinstance(event, Message):
+        return event.successful_payment is not None
+
+    return False
+
+
+def _event_user(event: TelegramObject) -> Any:
+    """Hodisadan foydalanuvchini ajratib oladi (fallback)."""
+    return getattr(event, "from_user", None)
+
 
 class SubscriptionMiddleware(BaseMiddleware):
     """
     Har bir hodisadan oldin majburiy kanallar a'zoligini tekshiradi.
 
-    Faqat private xabarlar/callbacklar uchun ishlaydi (channel/post xabarlar
-    botga tushmaydi, lekin himoya sifatida tekshiriladi).
+    To'lov hodisalari tekshiruvsiz o'tadi. Qolgan hodisalar uchun
+    `Update` ichidagi xabar/callback ajratib olinadi.
     """
 
     async def __call__(
@@ -60,7 +133,17 @@ class SubscriptionMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        user = data.get("event_from_user")
+        inner = _unwrap_event(event)
+
+        # 0) To'lov hodisalari — hech qanday tekshiruvsiz (pul bloklanmaydi!)
+        if _is_payment_event(inner) or _is_payment_event(event):
+            return await handler(event, data)
+
+        # Hodisa turi noma'lum (masalan, faqat `my_chat_member`) — o'tkazamiz
+        if inner is None:
+            return await handler(event, data)
+
+        user = data.get("event_from_user") or _event_user(inner)
 
         # 1) Foydalanuvchi aniqlanmagan hodisalar (masalan, kanal xabarlari)
         if user is None:
@@ -71,7 +154,7 @@ class SubscriptionMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # 3) "✅ A'zo bo'ldim" tugmasi bloklanmaydi — u qayta tekshiruv uchun
-        if isinstance(event, CallbackQuery) and event.data == CB_CHECK_SUBSCRIPTION:
+        if isinstance(inner, CallbackQuery) and inner.data == CB_CHECK_SUBSCRIPTION:
             return await handler(event, data)
 
         # 4) Faol kanallar ro'yxati (keshli, 60 soniya)
@@ -88,7 +171,7 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         # 5) A'zo emas — hodisani to'xtatamiz va yo'naltiruvchi yuboramiz
         logger.debug("user=%s obuna tekshiruvidan o'tmadi", user.id)
-        await self._send_subscription_prompt(event, bot, unjoined)
+        await self._send_subscription_prompt(inner, bot, unjoined)
         return None
 
     # ------------------------------------------------------------------
@@ -100,7 +183,7 @@ class SubscriptionMiddleware(BaseMiddleware):
         Ogohlantirish xabari + kanallar klaviaturasini yuboradi.
 
         - CallbackQuery hodisasi: callback tasdiqlanadi (spinner yopiladi)
-          va kanal chatiga xabar yuboriladi.
+          va xabar yuborilgan chatga yo'naltiruvchi yuboriladi.
         - Message hodisasi: xuddi shu chatga javob sifatida yuboriladi.
 
         Xatolar (foydalanuvchi botni blocklagan, xabar eskirgan va h.k.)
@@ -111,22 +194,44 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         try:
             if isinstance(event, CallbackQuery):
-                # Spinner'ni yopish (javob bermaslik Telegramda "so'rovlash" belgisini qoldiradi)
+                # Spinner'ni yopish (javob bermaslik Telegramda "so'rovlash" belgisini qoldiradi).
+                # `RuntimeError` — bot'ga ulanmagan (sintetik) callback uchun.
                 try:
                     await event.answer()
-                except TelegramAPIError:
+                except (TelegramAPIError, RuntimeError):
                     pass
 
-                target_chat_id = event.message.chat.id if event.message else None
+                message = event.message
+                target_chat_id = (
+                    message.chat.id
+                    if isinstance(message, (Message, InaccessibleMessage))
+                    else None
+                )
                 if target_chat_id is not None:
-                    await bot.send_message(
-                        chat_id=target_chat_id,
-                        text=SUBSCRIPTION_PROMPT_TEXT,
-                        reply_markup=markup,
-                    )
+                    try:
+                        await bot.send_message(
+                            chat_id=target_chat_id,
+                            text=SUBSCRIPTION_PROMPT_TEXT,
+                            reply_markup=markup,
+                        )
+                    except TelegramAPIError as exc:
+                        logger.warning(
+                            "Obuna promptini chatga yuborib bo'lmadi "
+                            "(chat_id=%s): %s",
+                            target_chat_id,
+                            exc,
+                        )
                 return
 
-            # Message va boshqa "answer" metodi bor hodisalar
+            if isinstance(event, Message):
+                await bot.send_message(
+                    chat_id=event.chat.id,
+                    text=SUBSCRIPTION_PROMPT_TEXT,
+                    reply_markup=markup,
+                )
+                return
+
+            # Boshqa "answer" metodi bor hodisalar (masalan, business xabarlar)
             answer = getattr(event, "answer", None)
             if callable(answer):
                 await answer(SUBSCRIPTION_PROMPT_TEXT, reply_markup=markup)
