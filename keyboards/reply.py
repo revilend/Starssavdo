@@ -5,34 +5,50 @@ Asosiy doimiy (reply) menyu — bot bilan suhbatning bosh ekrani.
 
 Xususiyatlar:
  - `resize_keyboard=True`  — tugmalar ekran kengligiga moslanadi.
- - `is_persistent=True`    — menyu har doim (hatto /start dan keyin ham) ko'rinadi.
- - Har bir tugma matni (BTN_*) konstant sifatida export qilinadi —
-   handler'larda `message.text == BTN_SHOP` deb tekshirish qulay bo'ladi.
+ - `is_persistent=True`    — menyu har doim ko'rinadi.
+ - Har bir tugma matni/rangi/premium emojisi `services.button_registry`
+   orqali olinadi — admin panelda o'zgartirilsa, keyingi klaviatura
+   yangilangan ko'rinishda chiqadi.
+ - `style`: primary (ko'k), success (yashil), danger (qizil) —
+   Telegram Bot API 9.4.
 
 Ishlatish:
-    from keyboards.reply import get_main_menu_kb, BTN_SHOP
+    from keyboards.reply import get_main_menu_kb
 
     await message.answer("Menyu:", reply_markup=get_main_menu_kb(is_admin=False))
 """
 
 from __future__ import annotations
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
-# -------------------------------------------------------------
-# Asosiy menyu tugma matnlari (handlerlarda solishtirish uchun)
-# -------------------------------------------------------------
-BTN_SHOP = "🛍 Do'kon"
-BTN_BALANCE = "⭐️ Balansim"
-BTN_REFER = "👥 Do'stlarni taklif qilish"
-BTN_GIFTS = "🎁 Mayda Giftlar"
-BTN_GUIDE = "ℹ️ Qo'llanma"
-BTN_ADMIN = "⚙️ Admin Panel"
+from services.button_registry import BUTTONS, build_reply_button
 
-# Menyu matnlarining to'plami — notanish matn kelganini aniqlash uchun
+# -------------------------------------------------------------
+# Asosiy menyu tugma kalitlari (tartib muhim)
+# -------------------------------------------------------------
+MENU_KEYS: tuple[str, ...] = (
+    "menu_shop",
+    "menu_balance",
+    "menu_topup",
+    "menu_refer",
+    "menu_gifts",
+    "menu_guide",
+)
+
+# Handlerlar/testlar uchun default matnlar (admin override bo'lmasa).
+BTN_SHOP = BUTTONS["menu_shop"].text
+BTN_BALANCE = BUTTONS["menu_balance"].text
+BTN_TOPUP = BUTTONS["menu_topup"].text
+BTN_REFER = BUTTONS["menu_refer"].text
+BTN_GIFTS = BUTTONS["menu_gifts"].text
+BTN_GUIDE = BUTTONS["menu_guide"].text
+BTN_ADMIN = BUTTONS["menu_admin"].text
+
+# Menyu matnlarining to'plami (default holatda) — testlar/validatsiya uchun
 MAIN_MENU_TEXTS: frozenset[str] = frozenset(
-    {BTN_SHOP, BTN_BALANCE, BTN_REFER, BTN_GIFTS, BTN_GUIDE, BTN_ADMIN}
+    BUTTONS[key].text for key in (*MENU_KEYS, "menu_admin")
 )
 
 
@@ -41,37 +57,37 @@ def get_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     Asosiy doimiy menyu (ReplyKeyboardMarkup).
 
     Tugmalar joylashuvi:
-        [ 🛍 Do'kon ]              [ ⭐️ Balansim ]
+        [ 🛍 Do'kon ]                    [ ⭐️ Balansim ]
         [ 👥 Do'stlarni taklif qilish ]  [ 🎁 Mayda Giftlar ]
+        [ 💳 Balans to'ldirish ]
         [ ℹ️ Qo'llanma ]
         (faqat admin uchun)  [ ⚙️ Admin Panel ]
 
     Args:
-        is_admin: True — foydalanuvchi ADMIN_IDS da bo'lsa, qo'shimcha
-                  "⚙️ Admin Panel" qatori qo'shiladi.
-
-    Returns: resize_keyboard=True, is_persistent=True bilan reply keyboard.
+        is_admin: True — qo'shimcha "⚙️ Admin Panel" qatori qo'shiladi.
     """
     builder = ReplyKeyboardBuilder()
 
     # 1-qator: do'kon + balans
     builder.row(
-        KeyboardButton(text=BTN_SHOP),
-        KeyboardButton(text=BTN_BALANCE),
+        build_reply_button("menu_shop"),
+        build_reply_button("menu_balance"),
     )
     # 2-qator: referal + mayda giftlar
     builder.row(
-        KeyboardButton(text=BTN_REFER),
-        KeyboardButton(text=BTN_GIFTS),
+        build_reply_button("menu_refer"),
+        build_reply_button("menu_gifts"),
     )
-    # 3-qator: qo'llanma (to'liq qator)
-    builder.row(KeyboardButton(text=BTN_GUIDE))
+    # 3-qator: balans to'ldirish (to'liq qator)
+    builder.row(build_reply_button("menu_topup"))
+    # 4-qator: qo'llanma
+    builder.row(build_reply_button("menu_guide"))
 
-    # Admin uchun qo'shimcha qator (faqat ADMIN_IDS dagi foydalanuvchida)
+    # Admin uchun qo'shimcha qator
     if is_admin:
-        builder.row(KeyboardButton(text=BTN_ADMIN))
+        builder.row(build_reply_button("menu_admin"))
 
     return builder.as_markup(
-        resize_keyboard=True,   # tugmalar kichraytiriladi (zamonaviy ko'rinish)
-        is_persistent=True,     # menyu doimiy — qayta yuborilmaydi ham ko'rinadi
+        resize_keyboard=True,
+        is_persistent=True,
     )

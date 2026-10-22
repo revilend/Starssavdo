@@ -35,7 +35,8 @@ from keyboards.builders import (
     CB_ADM_STATS,
     get_admin_main_kb,
 )
-from keyboards.reply import BTN_ADMIN, get_main_menu_kb
+from keyboards.reply import get_main_menu_kb
+from services.button_registry import ButtonText
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ EXIT_TEXT = "👋 Admin paneldan chiqildi. Asosiy menyuga qaytdingiz."
 # =============================================================
 # 1. PANELNI OCHISH (reply tugma yoki /admin)
 # =============================================================
-@router.message(F.text == BTN_ADMIN)
+@router.message(ButtonText("menu_admin"))
 async def admin_panel_open(message: Message) -> None:
     """Asosiy menyudan '⚙️ Admin Panel' bosilganda ochiladi."""
     await message.answer(PANEL_TEXT, reply_markup=get_admin_main_kb())

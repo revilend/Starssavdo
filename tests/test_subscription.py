@@ -18,6 +18,12 @@ os.environ.update({
 })
 sys.path.insert(0, ".")
 
+from config.settings import settings  # noqa: E402
+
+# Boshqa test moduli `settings` singletonini avvalroq yuklagan bo'lishi mumkin —
+# test izchil bo'lishi uchun admin ro'yxatini aniq o'rnatamiz.
+settings.ADMIN_IDS = [999001, 999002]
+
 from aiogram.exceptions import (  # noqa: E402
     TelegramBadRequest,
     TelegramForbiddenError,

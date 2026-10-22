@@ -29,7 +29,7 @@ from database.queries import (
     SettingsRepository,
 )
 from keyboards.inline import CB_TOP_REFERRERS, get_referral_kb
-from keyboards.reply import BTN_REFER
+from services.button_registry import ButtonText
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ async def _get_bot_username(bot: Any) -> str:
     return me.username
 
 
-@router.message(F.text == BTN_REFER)
+@router.message(ButtonText("menu_refer"))
 async def referral_menu(message: Message) -> None:
     """Referal bo'limi postini yuboradi."""
     user = message.from_user

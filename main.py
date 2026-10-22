@@ -30,7 +30,10 @@ Arxitektura:
    buzilgan JSON -> 400, handlerdagi kutilmagan xato -> 500 (Telegram
    qayta yuboradi; buyurtma/referal operatsiyalari idempotent).
  - Routerlar tartibi: admin routers -> subscription -> start & referral
-   -> shop & payout. Middlewarelar: Throttling -> Subscription.
+   -> shop, payout, topup. Middlewarelar: Throttling -> Subscription.
+ - Startup'da qo'shimcha: `ensure_schema()` (yetishmayotgan jadvallar),
+   `load_button_overrides()` (admin tugma sozlamalari) va
+   `load_custom_emojis(bot)` (Bot API 9.4 premium emoji ID'lari).
  - Bitta worker (uvicorn default) ishlatiladi: FSM `MemoryStorage` va
    ichki TTL keshlar jarayon ichida, shuning uchun `--workers > 1` tavsiya
    etilmaydi.
@@ -65,7 +68,9 @@ from config.settings import settings
 # 1. Admin routerlari (birinchi ulanadi)
 # -------------------------------------------------------------
 from handlers.admin.broadcast import router as admin_broadcast_router
+from handlers.admin.buttons import router as admin_buttons_router
 from handlers.admin.channels import router as admin_channels_router
+from handlers.admin.deposits import router as admin_deposits_router
 from handlers.admin.panel import router as admin_panel_router
 from handlers.admin.users_manage import router as admin_users_manage_router
 from handlers.admin.withdrawals import router as admin_withdrawals_router
@@ -78,6 +83,7 @@ from handlers.user.referral import router as referral_router
 from handlers.user.shop import router as shop_router
 from handlers.user.start import router as start_router
 from handlers.user.subscription import router as subscription_router
+from handlers.user.topup import router as topup_router
 
 # -------------------------------------------------------------
 # 3. Middlewarelar
@@ -89,6 +95,9 @@ from middlewares.throttling import ThrottlingMiddleware
 # 4. Database
 # -------------------------------------------------------------
 from database.connection import close_connection, test_connection
+from database.schema import ensure_schema
+from services.button_store import load_button_overrides
+from services.emoji_loader import load_custom_emojis
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +154,8 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(admin_broadcast_router)
     dp.include_router(admin_users_manage_router)
     dp.include_router(admin_withdrawals_router)
+    dp.include_router(admin_buttons_router)
+    dp.include_router(admin_deposits_router)
 
     dp.include_router(subscription_router)
 
@@ -153,6 +164,7 @@ def create_dispatcher() -> Dispatcher:
 
     dp.include_router(shop_router)
     dp.include_router(payout_router)
+    dp.include_router(topup_router)
 
     return dp
 
@@ -303,6 +315,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 "PostgreSQL bazasiga ulanib bo'lmadi — DATABASE_URL va DB_SSL "
                 "qiymatlarini tekshiring."
             )
+
+        # 1.1) Yetishmayotgan jadvallar (masalan, `deposits`) yaratiladi
+        await ensure_schema()
+
+        # 1.2) Tugma override'lari (admin panel) va premium emoji ID'lari
+        await load_button_overrides()
+        await load_custom_emojis(bot)
 
         # 2) Tanlangan rejimni ishga tushirish
         if settings.BOT_MODE == "polling":

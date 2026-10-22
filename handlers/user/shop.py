@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import html
 import logging
+from typing import Any
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -39,7 +40,6 @@ from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from config.settings import settings
 from database.queries import (
     ORDER_PENDING,
-    PAYMENT_BALANCE,
     PAYMENT_XTR,
     PRODUCT_CATEGORIES,
     InsufficientBalanceError,
@@ -56,7 +56,8 @@ from keyboards.inline import (
     get_products_list_kb,
     get_shop_categories_kb,
 )
-from keyboards.reply import BTN_SHOP
+from services.button_registry import ButtonText
+from services.gift_delivery import deliver_gift
 from services.payments import (
     build_order_payload,
     parse_order_payload,
@@ -182,7 +183,7 @@ async def _notify_admins(
 # =============================================================
 # 1. DO'KON KIRISHI
 # =============================================================
-@router.message(F.text == BTN_SHOP)
+@router.message(ButtonText("menu_shop"))
 async def shop_menu(message: Message) -> None:
     """🛍 Do'kon — kirish sahifasi va toifalar menyusi."""
     await message.answer(
@@ -193,28 +194,27 @@ async def shop_menu(message: Message) -> None:
     logger.info("Do'kon ochildi: user=%s", message.from_user.id)
 
 
+@router.message(ButtonText("menu_gifts"))
+async def gifts_menu(message: Message) -> None:
+    """🎁 Mayda Giftlar — to'g'ridan-to'g'ri gift toifasini ko'rsatadi."""
+    text, markup = await _category_view("gift")
+    await message.answer(text, parse_mode="HTML", reply_markup=markup)
+    logger.info("Giftlar bo'limi ochildi: user=%s", message.from_user.id)
+
+
 # =============================================================
 # 2. TOIFA — MAHSULOTLAR RO'YXATI
 # =============================================================
-@router.callback_query(F.data.startswith("cat_"))
-async def shop_category(callback: CallbackQuery) -> None:
-    """Tanlangan toifadagi faol mahsulotlar (nom, narx, tavsif)."""
-    category = (callback.data or "")[len("cat_"):].strip()
-    if category not in PRODUCT_CATEGORIES:
-        await callback.answer(ALERT_CATEGORY_NOT_FOUND, show_alert=True)
-        return
-
+async def _category_view(category: str) -> tuple[str, Any]:
+    """Toifa uchun (matn, klaviatura) tayyorlaydi — callback va reply uchun."""
     products = await ProductRepository.get_products_by_category(category)
     category_title = CATEGORY_TITLES.get(category, CATEGORY_EMOJI.get(category, "🛍"))
 
     if not products:
-        await callback.answer()
-        await callback.message.answer(
+        return (
             EMPTY_CATEGORY_TEXT.format(category_title=category_title),
-            parse_mode="HTML",
-            reply_markup=get_shop_categories_kb(),
+            get_shop_categories_kb(),
         )
-        return
 
     lines: list[str] = []
     for index, product in enumerate(products, start=1):
@@ -226,16 +226,27 @@ async def shop_category(callback: CallbackQuery) -> None:
             f"<b>{product.price_xtr} XTR</b>{desc_html}"
         )
 
-    await callback.answer()
-    await callback.message.answer(
+    text = (
         f"{category_title}\n\n" + "\n".join(lines) +
-        "\n\nXarid qilish uchun tugmani bosing 👇",
-        parse_mode="HTML",
-        reply_markup=get_products_list_kb(products, category),
+        "\n\nXarid qilish uchun tugmani bosing 👇"
     )
+    return text, get_products_list_kb(products, category)
+
+
+@router.callback_query(F.data.startswith("cat_"))
+async def shop_category(callback: CallbackQuery) -> None:
+    """Tanlangan toifadagi faol mahsulotlar (nom, narx, tavsif)."""
+    category = (callback.data or "")[len("cat_"):].strip()
+    if category not in PRODUCT_CATEGORIES:
+        await callback.answer(ALERT_CATEGORY_NOT_FOUND, show_alert=True)
+        return
+
+    await callback.answer()
+    text, markup = await _category_view(category)
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
     logger.info(
-        "Toifa ko'rsatildi: user=%s category=%s products=%s",
-        callback.from_user.id, category, len(products),
+        "Toifa ko'rsatildi: user=%s category=%s",
+        callback.from_user.id, category,
     )
 
 
@@ -429,12 +440,28 @@ async def on_successful_payment(message: Message) -> None:
         ),
         parse_mode="HTML",
     )
-    await _notify_admins(
-        message.bot, message.from_user, product_name, total_amount
-    )
+
+    # Gift mahsuloti bo'lsa — rasmiy sendGift bilan avtomatik yetkazish
+    delivered = False
+    if product is not None:
+        delivered = await deliver_gift(
+            message.bot, message.from_user.id, product
+        )
+
+    if delivered:
+        await message.answer(
+            "🎁 <b>Sovg'angiz avtomatik yuborildi!</b>\n"
+            "Telegram sovg'alar bo'limidan ko'rishingiz mumkin."
+        )
+    else:
+        # gift_id yo'q yoki yuborilmadi — admin qo'lda yetkazadi
+        await _notify_admins(
+            message.bot, message.from_user, product_name, total_amount
+        )
+
     logger.info(
-        "XTR to'lov qabul qilindi: user=%s order=%s charge=%s amount=%s",
-        message.from_user.id, order.id, charge_id, total_amount,
+        "XTR to'lov qabul qilindi: user=%s order=%s charge=%s amount=%s gift=%s",
+        message.from_user.id, order.id, charge_id, total_amount, delivered,
     )
 
 
@@ -499,7 +526,19 @@ async def pay_with_balance(callback: CallbackQuery) -> None:
         ),
         parse_mode="HTML",
     )
+
+    # Gift mahsuloti bo'lsa — avtomatik sendGift, aks holda adminga xabar
+    delivered = await deliver_gift(callback.bot, user_id, product)
+    if delivered:
+        await callback.message.answer(
+            "🎁 <b>Sovg'angiz avtomatik yuborildi!</b>"
+        )
+    else:
+        await _notify_admins(
+            callback.bot, callback.from_user, product.title, product.price_xtr
+        )
+
     logger.info(
-        "Balans orqali xarid: user=%s order=%s product=%s -%sXTR",
-        user_id, order.id, product.id, product.price_xtr,
+        "Balans orqali xarid: user=%s order=%s product=%s -%sXTR gift=%s",
+        user_id, order.id, product.id, product.price_xtr, delivered,
     )

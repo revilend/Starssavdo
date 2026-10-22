@@ -16,6 +16,8 @@ from keyboards import (  # noqa: E402
     get_admin_channel_manage_kb,
     get_admin_main_kb,
     get_balance_kb,
+    get_button_edit_kb,
+    get_buttons_manage_kb,
     get_main_menu_kb,
     get_products_list_kb,
     get_referral_kb,
@@ -55,17 +57,22 @@ def main() -> None:
     ok("resize_keyboard=True", kb.resize_keyboard is True)
     ok("is_persistent=True", kb.is_persistent is True)
     r = rows(kb)
-    ok("foydalanuvchi: 3 qator", len(r) == 3, str(len(r)))
+    ok("foydalanuvchi: 4 qator", len(r) == 4, str(len(r)))
     ok("1-qator: Do'kon + Balansim", r[0][0].text == BTN_SHOP and r[0][1].text == "⭐️ Balansim")
     ok("2-qator: Taklif + Giftlar",
        r[1][0].text == "👥 Do'stlarni taklif qilish" and r[1][1].text == "🎁 Mayda Giftlar")
-    ok("3-qator: Qo'llanma", [b.text for b in r[2]] == ["ℹ️ Qo'llanma"])
+    ok("3-qator: Balans to'ldirish", [b.text for b in r[2]] == ["💳 Balans to'ldirish"])
+    ok("4-qator: Qo'llanma", [b.text for b in r[3]] == ["ℹ️ Qo'llanma"])
     ok("oddiy foydalanuvchida Admin yo'q", all(b.text != BTN_ADMIN for row in r for b in row))
-    ok("6 ta menyu matni konstantasi", len(MAIN_MENU_TEXTS) == 6)
+    ok("7 ta menyu matni konstantasi", len(MAIN_MENU_TEXTS) == 7, str(len(MAIN_MENU_TEXTS)))
+    ok("ranglar: Do'kon primary, Taklif success",
+       r[0][0].style == "primary" and r[1][0].style == "success")
+    ok("Balans to'ldirish success", r[2][0].style == "success")
 
     kba = get_main_menu_kb(is_admin=True)
     ra = rows(kba)
-    ok("admin: 4-qator Admin Panel", len(ra) == 4 and ra[3][0].text == BTN_ADMIN)
+    ok("admin: 5-qator Admin Panel",
+       len(ra) == 5 and ra[4][0].text == BTN_ADMIN and ra[4][0].style == "danger")
     ok("admin ham persistent/resize", kba.is_persistent and kba.resize_keyboard)
 
     print("== inline: obuna ==")
@@ -82,6 +89,7 @@ def main() -> None:
        and r[2][0].text == "📢 3-Kanalga a'zo bo'lish")
     ok("yashil tekshiruv tugmasi",
        r[3][0].text == "✅ A'zo bo'ldim" and r[3][0].callback_data == "check_subscription")
+    ok("tekshiruv tugmasi success rangda", r[3][0].style == "success")
     ok("bo'sh kanallar ro'yxati ham ishlaydi",
        len(inline_rows(get_subscription_kb([]))) == 1)
 
@@ -127,24 +135,30 @@ def main() -> None:
     print("== inline: balans ==")
     kb = get_balance_kb(120, 50)
     flat = [b for row in inline_rows(kb) for b in row]
-    ok("3 tugma", len(flat) == 3)
-    ok("yechib olish (balans yetarli)", flat[0].callback_data == "withdraw_start"
-       and "120⭐️" in flat[0].text, flat[0].text)
-    ok("tarix", flat[1].callback_data == "tx_history")
-    ok("bosh menyu", flat[2].callback_data == "back_to_menu")
+    ok("4 tugma (to'ldirish + yechish + tarix + menyu)", len(flat) == 4)
+    ok("balans to'ldirish", flat[0].callback_data == "topup_start"
+       and flat[0].style == "success")
+    ok("yechib olish (balans yetarli)", flat[1].callback_data == "withdraw_start"
+       and "120⭐️" in flat[1].text, flat[1].text)
+    ok("yechish success rangda", flat[1].style == "success")
+    ok("tarix", flat[2].callback_data == "tx_history")
+    ok("bosh menyu", flat[3].callback_data == "back_to_menu")
     kb2 = get_balance_kb(10, 50)
     f2 = [b for row in inline_rows(kb2) for b in row]
-    ok("balans yetarli emas -> min ko'rsatiladi", "min 50⭐️" in f2[0].text, f2[0].text)
+    ok("balans yetarli emas -> min ko'rsatiladi", "min 50⭐️" in f2[1].text, f2[1].text)
 
     print("== builders: admin ==")
     kb = get_admin_main_kb()
     flat = [b for row in inline_rows(kb) for b in row]
-    ok("7 tugma (6 bo'lim + chiqish)", len(flat) == 7, str(len(flat)))
+    ok("8 tugma (7 bo'lim + chiqish)", len(flat) == 8, str(len(flat)))
     ok("callbacklar to'liq",
-       [b.callback_data for b in flat[:6]] == ["adm_stats", "adm_broadcast", "adm_channels",
-                                               "adm_ref_price", "adm_withdrawals", "adm_balance_edit"])
-    ok("chiqish oxirida to'liq qator", flat[6].text == "❌ Chiqish"
-       and flat[6].callback_data == "adm_exit" and len(inline_rows(kb)[3]) == 1)
+       [b.callback_data for b in flat[:7]] == ["adm_stats", "adm_broadcast", "adm_channels",
+                                               "adm_ref_price", "adm_withdrawals", "adm_balance_edit",
+                                               "adm_buttons"])
+    ok("yangi bo'lim: Tugnalar va Emojilar", flat[6].text == "🎛 Tugnalar va Emojilar")
+    ok("chiqish oxirida to'liq qator", flat[7].text == "❌ Chiqish"
+       and flat[7].callback_data == "adm_exit" and flat[7].style == "danger"
+       and len(inline_rows(kb)[4]) == 1)
 
     class ACh:
         def __init__(self, i, title, active):
@@ -165,6 +179,20 @@ def main() -> None:
     ok("2 qaror tugmasi bitta qatorda", len(flat) == 2 and len(inline_rows(kb)) == 1)
     ok("approve_payout_77", flat[0].text == "✅ Tasdiqlash" and flat[0].callback_data == "approve_payout_77")
     ok("reject_payout_77", flat[1].text == "❌ Rad etish" and flat[1].callback_data == "reject_payout_77")
+    ok("qaror ranglari: success/danger",
+       flat[0].style == "success" and flat[1].style == "danger")
+
+    print("== builders: tugmalar va emojilar ==")
+    kb = get_buttons_manage_kb([("menu_shop", "Do'kon"), ("menu_refer", "Taklif")])
+    flat = [b for row in inline_rows(kb) for b in row]
+    ok("2 tugma + orqaga", len(flat) == 3
+       and flat[0].callback_data == "adm_btn_menu_shop"
+       and flat[2].callback_data == "adm_back")
+    edit = [b for row in inline_rows(get_button_edit_kb("menu_shop")) for b in row]
+    ok("tahrirlash: nom + emoji + reset + orqaga", len(edit) == 4
+       and edit[0].callback_data == "adm_btnedit_text_menu_shop"
+       and edit[1].callback_data == "adm_btnedit_icon_menu_shop"
+       and edit[2].callback_data == "adm_btnreset_menu_shop")
 
     print(f"\nBARCHA TESTLAR O'TDI: {PASSED} ta tekshiruv")
 

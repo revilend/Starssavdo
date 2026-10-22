@@ -16,8 +16,9 @@ aiogram 3.x boti. Render.com (Free Web Service) da **webhook** rejimida
 | `handlers/admin/` | Admin panel: statistika, kanallar, rassilka, foydalanuvchilar, yechim |
 | `middlewares/` | Throttling + majburiy obuna tekshiruvi |
 | `states/` | FSM holatlari |
-| `services/` | To'lov (XTR invoice) va kanal obunasi servislari |
+| `services/` | To'lov (XTR invoice), obuna, premium emoji, tugma reyestri, gift yetkazish |
 | `render.yaml` | Render Blueprint (uvicorn start command, env o'zgaruvchilar) |
+| `database/schema.py` | Yetishmayotgan jadvallarni avtomatik yaratish (`create_all`) |
 
 ## Ish rejimlari
 
@@ -149,6 +150,81 @@ production'da faqat `BOT_MODE=webhook` ishlating.
 * Handlerdagi kutilmagan xato — **500** (Telegram qayta yuboradi; buyurtma
   va referal mukofotlari idempotent).
 
+## Bot API 9.4: rangli tugmalar va premium emoji
+
+`services/emoji_loader.py` bot ishga tushganda quyidagi sticker to'plamlaridan
+`custom_emoji_id` larni yuklaydi (topilmasa bot ishlashda davom etadi):
+
+| To'plam | Ishlatilishi |
+|---|---|
+| `SystemicDuck`, `CastilosDuck` | asosiy menyu (Do'kon, Balans, Taklif, Giftlar, Admin) |
+| `statuspack_uz` | ✅ A'zo bo'ldim, Tasdiqlash |
+| `business_emojis` | 💳 to'lov va 💸 yechib olish |
+
+Tugmalar `services/button_registry.py` orqali quriladi va quyidagi ranglarni
+oladi (Bot API 9.4 `style`):
+
+* `primary` (ko'k) — Do'kon, Balansim, Giftlar, Premium, NFT, navigatsiya;
+* `success` (yashil) — Do'stlarni taklif qilish, Balans to'ldirish, A'zo bo'ldim, Yechib olish, Tasdiqlash;
+* `danger` (qizil) — Admin Panel, Rad etish, Yopish, Chiqish.
+
+> Custom emoji faqat **bot egasida Telegram Premium** bo'lsa ko'rinadi — bu
+> Telegram cheklovi; aks holda matndagi oddiy emoji qoladi.
+
+### Admin panel: 🎛 Tugnalar va Emojilar
+
+Admin panel → **🎛 Tugnalar va Emojilar**: istalgan tugmani tanlab,
+
+* nomini o'zgartirish (handler'lar `ButtonText(key)` filtri bilan ishlaydi,
+  shuning uchun nom o'zgarsa ham tugma ishlaydi);
+* Premium emoji yuborish (`message.entities` dagi `custom_emoji_id` olinadi)
+yoki `custom_emoji_id` raqamini kiritish;
+* **♻️ Default holatga qaytarish**.
+
+O'zgarishlar `settings` jadvalida `btn:<key>:text` / `btn:<key>:icon`
+sifatida saqlanadi va darhol barcha klaviaturalarga qo'llanadi.
+
+## Karta orqali balans to'ldirish (UZCARD / HUMO)
+
+1. Admin panel → **⭐️ Referal narxini sozlash** → **💳 To'lov kartasi**:
+   karta raqami (16–19 raqam) va egasi kiritiladi
+   (`payment_card_number`, `payment_card_holder`).
+2. Foydalanuvchi **💳 Balans to'ldirish** → miqdorni kiritadi (min 10 ⭐️)
+   → karta rekvizitlari ko'rsatiladi → to'lov chekini rasm qilib yuboradi.
+3. Bot chekni barcha adminlarga **[✅ Tasdiqlash] / [❌ Rad etish]** bilan
+   yuboradi. Tasdiqlanganda balans **atomik** to'ldiriladi
+   (`deposits` jadvali, `deposit` audit yozuvi) va foydalanuvchiga xabar
+   boradi. Rad etilsa balans o'zgarmaydi.
+4. Ikki marta tasdiqlab bo'lmaydi — so'rov `pending` holatidan chiqadi.
+
+`deposits` jadvali startupda `ensure_schema()` orqali avtomatik yaratiladi
+(mavjud jadvallarga tegmaydi).
+
+## Giftlarni avtomatik yuborish (`sendGift`)
+
+Mahsulot `payload` (JSON) maydonida rasmiy Telegram `gift_id` bo'lsa, to'lov
+muvaffaqiyatli yakunlangach sovg'a avtomatik jo'natiladi:
+
+```json
+{"gift_id": "5170145012310081615"}
+```
+
+`metadata` ichida ham qabul qilinadi: `{"metadata": {"gift_id": "..."}}`.
+
+* `sendGift` sovg'a narxini **botning Stars balansidan** yechadi — botda
+  yetarli Stars bo'lishi kerak.
+* `gift_id` yo'q bo'lsa yoki Telegram xato qaytarsa, buyurtma adminga
+  yuboriladi (qo'lda yetkazish) va foydalanuvchi chekni oladi.
+
+`gift_id` larni `getAvailableGifts` orqali bilib olish mumkin; mahsulotga
+qiymatni SQL orqali yozing, masalan:
+
+```sql
+UPDATE products
+SET payload = '{"gift_id": "5170145012310081615"}'::json
+WHERE id = 1;
+```
+
 ## Supabase ulanishi
 
 * `?sslmode=require` connection string'i avtomatik `ssl="require"` ga
@@ -162,6 +238,12 @@ production'da faqat `BOT_MODE=webhook` ishlating.
 
 ```bash
 python -m pytest tests/ -q
+```
+
+Yangi imkoniyatlar testi:
+
+```bash
+python -m pytest tests/test_features_api94.py -q
 ```
 
 Alohida tekshiruvlar (aiosqlite talab qiladi):

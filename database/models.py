@@ -397,7 +397,62 @@ class Setting(Base):
 
 
 # =============================================================
-# 9. ANTI-FRAUD JURNALI
+# 9. KARTA ORQALI BALANS TO'LDIRISH SO'ROVLARI
+# =============================================================
+class DepositRequest(Base):
+    """
+    Karta (UZCARD/HUMO) orqali balans to'ldirish so'rovi.
+
+    Oqim: create_deposit (status=pending, chek file_id bilan)
+          -> confirm_deposit (status=approved, balansga +amount, deposit audit)
+          -> reject_deposit  (status=rejected, balans o'zgarmaydi)
+
+    `receipt_file_id` — foydalanuvchi yuborgan chek rasmining Telegram
+    file_id'si (admin qayta ko'rish / tekshirish uchun saqlanadi).
+    """
+
+    __tablename__ = "deposits"
+
+    id: Mapped[int] = mapped_column(BIGINT, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BIGINT,
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    amount: Mapped[int] = mapped_column(
+        BIGINT, nullable=False, comment="To'ldiriladigan Stars miqdori"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", comment="pending/approved/rejected"
+    )
+    receipt_file_id: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="To'lov cheki (rasm) file_id"
+    )
+    admin_id: Mapped[int | None] = mapped_column(
+        BIGINT, nullable=True, comment="Qaysi admin ko'rib chiqdi"
+    )
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+    processed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected')",
+            name="ck_deposits_status",
+        ),
+        CheckConstraint("amount > 0", name="ck_deposits_amount_positive"),
+        Index("ix_deposits_status", "status"),
+        Index("ix_deposits_user_created", "user_id", "created_at"),
+    )
+
+
+# =============================================================
+# 10. ANTI-FRAUD JURNALI
 # =============================================================
 class AntiFraudLog(Base):
     """Nakrutka va boshqa shubhali faoliyat yozuvlari."""

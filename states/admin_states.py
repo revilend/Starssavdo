@@ -53,3 +53,17 @@ class ManualBalanceStates(StatesGroup):
 
     waiting_for_user_id = State()  # Nixo'langan foydalanuvchi IDsi
     waiting_for_amount = State()   # Miqdor: "+100" (qo'shish) yoki "-50" (ayirish)
+
+
+class ButtonEditStates(StatesGroup):
+    """Admin panelda tugma matni va premium emojisini o'zgartirish."""
+
+    waiting_for_text = State()   # Yangi tugma nomi
+    waiting_for_emoji = State()  # Premium emoji (custom_emoji entity) xabari
+
+
+class PaymentCardStates(StatesGroup):
+    """To'lov kartasi rekvizitlarini o'zgartirish (UZCARD/HUMO)."""
+
+    waiting_for_number = State()  # Karta raqami (16-19 raqam)
+    waiting_for_holder = State()  # Karta egasining F.I.SH.

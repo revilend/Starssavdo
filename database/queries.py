@@ -50,6 +50,7 @@ from database.connection import get_session
 from database.models import (
     AntiFraudLog,
     Channel,
+    DepositRequest,
     Order,
     Product,
     Referral,
@@ -100,6 +101,13 @@ WITHDRAWAL_REJECTED: Final[str] = "rejected"
 # Tizim sozlamalari kalitlari
 SETTING_REFERRAL_REWARD: Final[str] = "referral_reward_stars"
 SETTING_MIN_WITHDRAWAL: Final[str] = "min_withdrawal_stars"
+SETTING_CARD_NUMBER: Final[str] = "payment_card_number"
+SETTING_CARD_HOLDER: Final[str] = "payment_card_holder"
+
+# Balans to'ldirish so'rovlari statuslari
+DEPOSIT_PENDING: Final[str] = "pending"
+DEPOSIT_APPROVED: Final[str] = "approved"
+DEPOSIT_REJECTED: Final[str] = "rejected"
 
 # Referal velocity (nakrutka) tekshiruvi
 VELOCITY_WINDOW: Final[timedelta] = timedelta(hours=1)  # so'nggi 1 soat
@@ -123,6 +131,10 @@ class SelfReferralError(RepositoryError):
 
 class WithdrawalStateError(RepositoryError):
     """Yechib olish so'rovi allaqachon ko'rib chiqilgan (pending emas)."""
+
+
+class DepositStateError(RepositoryError):
+    """Balans to'ldirish so'rovi allaqachon ko'rib chiqilgan (pending emas)."""
 
 
 # =============================================================
@@ -1301,7 +1313,184 @@ class WithdrawalRepository:
 
 
 # =============================================================
-# 7. SETTINGS REPOSITORY
+# 7. DEPOSIT REPOSITORY (karta orqali balans to'ldirish)
+# =============================================================
+class DepositRepository:
+    """
+    Karta (UZCARD/HUMO) orqali balans to'ldirish so'rovlari.
+
+    Oqim: create_deposit (pending) -> confirm_deposit (balans + audit) yoki
+    reject_deposit (balans o'zgarmaydi). Tasdiqlash idempotent: pending
+    bo'lmagan so'rov qayta tasdiqlanmaydi (`DepositStateError`).
+    """
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def create_deposit(
+        user_id: int,
+        amount: int,
+        receipt_file_id: str | None = None,
+    ) -> DepositRequest:
+        """
+        Yangi `pending` to'ldirish so'rovini yaratadi (balans hali tegmaydi).
+
+        Raises:
+            ValueError: amount <= 0.
+            RepositoryError: foydalanuvchi topilmadi.
+        """
+        if amount <= 0:
+            raise ValueError("Miqdor 0 dan katta bo'lishi kerak")
+
+        async with get_session() as session:
+            user = await session.get(User, user_id, with_for_update=True)
+            if user is None:
+                raise RepositoryError(f"Foydalanuvchi {user_id} topilmadi")
+
+            deposit = DepositRequest(
+                user_id=user_id,
+                amount=amount,
+                status=DEPOSIT_PENDING,
+                receipt_file_id=receipt_file_id,
+            )
+            session.add(deposit)
+            await session.flush()
+            logger.info(
+                "Deposit so'rovi yaratildi: id=%s user=%s amount=%s",
+                deposit.id, user_id, amount,
+            )
+            return deposit
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_deposit(deposit_id: int) -> DepositRequest | None:
+        """Bitta to'ldirish so'rovini ID bo'yicha oladi."""
+        async with get_session() as session:
+            return await session.get(DepositRequest, deposit_id)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_deposits(
+        status: str | None = None, limit: int = 20
+    ) -> list[DepositRequest]:
+        """So'rovlar ro'yxati (admin panel uchun, oxirgilari birinchi)."""
+        async with get_session() as session:
+            stmt = select(DepositRequest)
+            if status is not None:
+                stmt = stmt.where(DepositRequest.status == status)
+            result = await session.execute(
+                stmt.order_by(DepositRequest.created_at.desc()).limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def count_pending_deposits() -> int:
+        """Kutilayotgan (pending) to'ldirish so'rovlari soni."""
+        async with get_session() as session:
+            return int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(DepositRequest)
+                    .where(DepositRequest.status == DEPOSIT_PENDING)
+                )
+                or 0
+            )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def confirm_deposit(
+        deposit_id: int, admin_id: int
+    ) -> tuple[DepositRequest, int]:
+        """
+        To'ldirishni tasdiqlaydi va balansga ATOMIK qo'shadi.
+
+        Bitta tranzaksiyada:
+          1. So'rov FOR UPDATE bilan qulflanadi; pending emas ->
+             `DepositStateError` (ikki marta hisoblanmaydi).
+          2. Foydalanuvchi qatori qulflanadi, balans +amount.
+          3. `transactions`ga `deposit` audit yozuvi qo'shiladi.
+          4. Status -> approved, admin_id/processed_at.
+
+        Returns: (deposit, yangi_balans)
+        """
+        async with get_session() as session:
+            deposit = await session.get(
+                DepositRequest, deposit_id, with_for_update=True
+            )
+            if deposit is None:
+                raise RepositoryError(f"Deposit {deposit_id} topilmadi")
+            if deposit.status != DEPOSIT_PENDING:
+                raise DepositStateError(
+                    f"So'rov {deposit_id} allaqachon '{deposit.status}' holatida"
+                )
+
+            user = await session.get(User, deposit.user_id, with_for_update=True)
+            if user is None:
+                raise RepositoryError(
+                    f"Foydalanuvchi {deposit.user_id} topilmadi (balans qo'shilmadi)"
+                )
+
+            user.stars_balance += deposit.amount
+            session.add(
+                TransactionRow(
+                    user_id=user.user_id,
+                    amount=deposit.amount,
+                    tx_type=TX_DEPOSIT,
+                    description=f"Karta orqali to'ldirish (deposit #{deposit.id})",
+                    reference_id=str(deposit.id),
+                )
+            )
+
+            deposit.status = DEPOSIT_APPROVED
+            deposit.admin_id = admin_id
+            deposit.processed_at = utcnow()
+            await session.flush()
+
+            logger.info(
+                "Deposit tasdiqlandi: id=%s user=%s amount=%s admin=%s -> %s",
+                deposit.id, deposit.user_id, deposit.amount, admin_id,
+                user.stars_balance,
+            )
+            return deposit, user.stars_balance
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def reject_deposit(
+        deposit_id: int, admin_id: int, reason: str
+    ) -> DepositRequest:
+        """
+        To'ldirish so'rovini rad etadi (balans o'zgarmaydi).
+
+        Raises:
+            RepositoryError: so'rov topilmadi.
+            DepositStateError: so'rov allaqachon ko'rib chiqilgan.
+        """
+        async with get_session() as session:
+            deposit = await session.get(
+                DepositRequest, deposit_id, with_for_update=True
+            )
+            if deposit is None:
+                raise RepositoryError(f"Deposit {deposit_id} topilmadi")
+            if deposit.status != DEPOSIT_PENDING:
+                raise DepositStateError(
+                    f"So'rov {deposit_id} allaqachon '{deposit.status}' holatida"
+                )
+
+            deposit.status = DEPOSIT_REJECTED
+            deposit.admin_id = admin_id
+            deposit.reject_reason = reason
+            deposit.processed_at = utcnow()
+            await session.flush()
+
+            logger.info(
+                "Deposit rad etildi: id=%s user=%s admin=%s reason=%s",
+                deposit.id, deposit.user_id, admin_id, reason,
+            )
+            return deposit
+
+
+# =============================================================
+# 8. SETTINGS REPOSITORY
 # =============================================================
 class SettingsRepository:
     """Tizim sozlamalari (kalit-qiymat) — admin paneldan o'zgartiriladi."""
@@ -1319,6 +1508,33 @@ class SettingsRepository:
         """
         async with get_session() as session:
             return await _load_setting(session, key, default)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_settings_by_prefix(prefix: str) -> dict[str, str]:
+        """
+        Berilgan prefiks bilan boshlanadigan barcha sozlamalar (dict).
+
+        `btn:` prefiksli tugma override'larini bitta so'rovda yuklash uchun.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(Setting).where(Setting.key.startswith(prefix))
+            )
+            return {row.key: row.value for row in result.scalars().all()}
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def delete_setting(key: str) -> bool:
+        """
+        Sozlamani o'chiradi (tugma override'ini tiklash uchun).
+
+        Returns: True — o'chirildi; False — bunday kalit yo'q edi.
+        """
+        async with get_session() as session:
+            result = await session.execute(delete(Setting).where(Setting.key == key))
+            await session.flush()
+            return bool(result.rowcount)
 
     # ------------------------------------------------------------------
     @staticmethod

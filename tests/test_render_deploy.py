@@ -155,8 +155,14 @@ def _patch_runtime(
 
         return _run_forever()
 
+    async def fake_noop(*args: Any, **kwargs: Any) -> None:
+        return None
+
     monkeypatch.setattr(app_main, "test_connection", fake_test_connection)
     monkeypatch.setattr(app_main, "close_connection", fake_close_connection)
+    monkeypatch.setattr(app_main, "ensure_schema", fake_noop)
+    monkeypatch.setattr(app_main, "load_button_overrides", fake_noop)
+    monkeypatch.setattr(app_main, "load_custom_emojis", fake_noop)
     monkeypatch.setattr(app_main.bot, "set_webhook", fake_set_webhook)
     monkeypatch.setattr(app_main.bot, "delete_webhook", fake_delete_webhook)
     monkeypatch.setattr(app_main.bot.session, "close", fake_session_close)

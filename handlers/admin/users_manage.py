@@ -20,15 +20,18 @@ Bekor qilish: istalgan bosqichda /cancel
 
 from __future__ import annotations
 
+import html
 import logging
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config.settings import settings
 from database.queries import (
+    SETTING_CARD_HOLDER,
+    SETTING_CARD_NUMBER,
     SETTING_MIN_WITHDRAWAL,
     SETTING_REFERRAL_REWARD,
     TX_ADMIN_ADJUST,
@@ -37,7 +40,11 @@ from database.queries import (
     UserRepository,
 )
 from keyboards.builders import CB_ADM_BALANCE_EDIT, CB_ADM_REF_PRICE
-from states.admin_states import ChangeSettingsStates, ManualBalanceStates
+from states.admin_states import (
+    ChangeSettingsStates,
+    ManualBalanceStates,
+    PaymentCardStates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,7 @@ router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 # Sub-menu callback'lari (shu modul ichida)
 CB_UM_SET_REF = "adm_um_set_ref"
 CB_UM_SET_MIN = "adm_um_set_min"
+CB_UM_SET_CARD = "adm_um_set_card"
 
 # -------------------------------------------------------------
 # Matnlar (HTML)
@@ -80,6 +88,28 @@ ASK_MIN_WITHDRAWAL_TEXT = (
 
 SAVED_TEXT = "✅ Saqlandi: <b>{key}</b> = <b>{value} ⭐️</b>"
 
+ASK_CARD_NUMBER_TEXT = (
+    "💳 <b>To'lov kartasi (UZCARD / HUMO)</b>\n\n"
+    "Joriy karta: <code>{current}</code>\n\n"
+    "Yangi karta raqamini yuboring (16–19 raqam, bo'shliqlarsiz).\n"
+    "Masalan: <code>8600123456789012</code>\n\n"
+    "Bekor qilish: /cancel"
+)
+
+ASK_CARD_HOLDER_TEXT = (
+    "👤 <b>Karta egasi</b>\n\n"
+    "Karta egasining F.I.SH. ni yuboring.\n"
+    "Masalan: <code>ALI VALIYEV</code>\n\n"
+    "Bekor qilish: /cancel"
+)
+
+CARD_SAVED_TEXT = (
+    "✅ <b>Karta rekvizitlari saqlandi</b>\n\n"
+    "├ Karta: <code>{number}</code>\n"
+    "└ Egasi: <b>{holder}</b>\n\n"
+    "Endi foydalanuvchilar shu kartaga to'lov qilib balans to'ldirishi mumkin."
+)
+
 ASK_USER_ID_TEXT = (
     "👤 <b>Foydalanuvchi balansini o'zgartirish</b>\n\n"
     "1/2 — Maqsad foydalanuvchi <b>ID sini</b> yuboring.\n"
@@ -107,12 +137,32 @@ CANCELLED_TEXT = "❌ Bekor qilindi."
 
 
 def _settings_menu_kb() -> InlineKeyboardMarkup:
-    """Sozlamalar sub-menusi: referal narxi / minimal yechish."""
+    """Sozlamalar sub-menusi: referal narxi / minimal yechish / karta."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="⭐️ Referal narxi", callback_data=CB_UM_SET_REF)
-    builder.button(text="💸 Minimal yechib olish", callback_data=CB_UM_SET_MIN)
+    builder.button(
+        text="⭐️ Referal narxi",
+        callback_data=CB_UM_SET_REF,
+        style="primary",
+    )
+    builder.button(
+        text="💸 Minimal yechib olish",
+        callback_data=CB_UM_SET_MIN,
+        style="primary",
+    )
+    builder.button(
+        text="💳 To'lov kartasi (UZCARD/HUMO)",
+        callback_data=CB_UM_SET_CARD,
+        style="success",
+    )
     builder.adjust(1)
     return builder.as_markup()
+
+
+async def _current_card() -> tuple[str, str]:
+    """(karta raqami, karta egasi) — bazadan (bo'sh bo'lishi mumkin)."""
+    number = await SettingsRepository.get_setting(SETTING_CARD_NUMBER, "")
+    holder = await SettingsRepository.get_setting(SETTING_CARD_HOLDER, "")
+    return str(number or ""), str(holder or "")
 
 
 async def _current_settings() -> tuple[int, int]:
@@ -141,6 +191,8 @@ async def _current_settings() -> tuple[int, int]:
 )
 @router.message(ManualBalanceStates.waiting_for_user_id, F.text == "/cancel")
 @router.message(ManualBalanceStates.waiting_for_amount, F.text == "/cancel")
+@router.message(PaymentCardStates.waiting_for_number, F.text == "/cancel")
+@router.message(PaymentCardStates.waiting_for_holder, F.text == "/cancel")
 async def users_manage_cancel(message: Message, state: FSMContext) -> None:
     """FSM holatini tozalaydi va sozlamalar menyusiga qaytadi."""
     await state.clear()
@@ -241,7 +293,74 @@ async def set_min_withdrawal_apply(message: Message, state: FSMContext) -> None:
 
 
 # =============================================================
-# 2. BALANSNI QO'LDA O'ZGARTIRISH
+# 2. TO'LOV KARTASI REKVIZITLARI (UZCARD / HUMO)
+# =============================================================
+@router.callback_query(F.data == CB_UM_SET_CARD)
+async def set_card_start(callback: CallbackQuery, state: FSMContext) -> None:
+    """💳 Karta raqamini o'zgartirish — joriy qiymat bilan so'raydi."""
+    number, _ = await _current_card()
+    await state.set_state(PaymentCardStates.waiting_for_number)
+    await callback.answer()
+    await callback.message.answer(
+        ASK_CARD_NUMBER_TEXT.format(current=number or "kiritilmagan")
+    )
+
+
+@router.message(PaymentCardStates.waiting_for_number, F.text)
+async def set_card_number(message: Message, state: FSMContext) -> None:
+    """Karta raqamini tekshiradi va egasini so'raydi."""
+    digits = "".join(ch for ch in (message.text or "") if ch.isdigit())
+    if not 16 <= len(digits) <= 19:
+        await message.answer(
+            "⚠️ Karta raqami 16–19 raqamdan iborat bo'lishi kerak.\n"
+            "Masalan: <code>8600123456789012</code>",
+        )
+        return
+
+    await state.update_data(card_number=digits)
+    await state.set_state(PaymentCardStates.waiting_for_holder)
+    await message.answer(ASK_CARD_HOLDER_TEXT)
+
+
+@router.message(PaymentCardStates.waiting_for_holder, F.text)
+async def set_card_holder(message: Message, state: FSMContext) -> None:
+    """Karta egasini saqlaydi va ikkala rekvizitni bazaga yozadi."""
+    holder = " ".join((message.text or "").split())
+    if not 3 <= len(holder) <= 64:
+        await message.answer(
+            "⚠️ Karta egasi 3–64 belgidan iborat bo'lishi kerak "
+            "(masalan: <code>ALI VALIYEV</code>)."
+        )
+        return
+
+    data = await state.get_data()
+    number = str(data.get("card_number", ""))
+    if not number:
+        await state.clear()
+        await message.answer("⚠️ Xatolik: karta raqami yo'qolgan. Qaytadan boshlang.")
+        return
+
+    await SettingsRepository.update_setting(SETTING_CARD_NUMBER, number)
+    await SettingsRepository.update_setting(SETTING_CARD_HOLDER, holder)
+    await state.clear()
+
+    formatted = " ".join(
+        number[index:index + 4] for index in range(0, len(number), 4)
+    )
+    logger.info(
+        "Karta rekvizitlari o'zgardi (admin=%s): %s",
+        message.from_user.id,
+        formatted,
+    )
+    await message.answer(
+        CARD_SAVED_TEXT.format(
+            number=formatted, holder=html.escape(holder)
+        )
+    )
+
+
+# =============================================================
+# 3. BALANSNI QO'LDA O'ZGARTIRISH
 # =============================================================
 @router.callback_query(F.data == CB_ADM_BALANCE_EDIT)
 async def balance_edit_start(callback: CallbackQuery, state: FSMContext) -> None:
