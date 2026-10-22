@@ -78,6 +78,7 @@ from handlers.admin.withdrawals import router as admin_withdrawals_router
 # -------------------------------------------------------------
 # 2. User routerlari (subscription -> start/referral -> shop/payout)
 # -------------------------------------------------------------
+from handlers.user.card_auto import router as card_auto_router
 from handlers.user.payout import router as payout_router
 from handlers.user.referral import router as referral_router
 from handlers.user.shop import router as shop_router
@@ -165,6 +166,8 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(shop_router)
     dp.include_router(payout_router)
     dp.include_router(topup_router)
+    # Karta to'lovlari jurnali (faqat CARD_LOG_CHAT_ID chatida ishlaydi)
+    dp.include_router(card_auto_router)
 
     return dp
 

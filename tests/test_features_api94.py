@@ -57,10 +57,13 @@ from aiogram.methods import SendMessage  # noqa: E402
 
 import handlers.admin.buttons as admin_buttons  # noqa: E402
 import handlers.admin.deposits as admin_deposits  # noqa: E402
+import handlers.user.card_auto as card_auto  # noqa: E402
 import handlers.user.shop as shop  # noqa: E402
 import handlers.user.topup as topup  # noqa: E402
 from database.models import Base, Transaction  # noqa: E402
+from config.settings import settings  # noqa: E402
 from database.queries import (  # noqa: E402
+    AUTO_DEPOSIT_ADMIN_ID,
     DEPOSIT_APPROVED,
     DEPOSIT_PENDING,
     DEPOSIT_REJECTED,
@@ -84,6 +87,11 @@ from services.emoji_loader import (  # noqa: E402
     find_custom_emoji_id,
     get_custom_emoji_id,
     load_custom_emojis,
+)
+from services.card_payment import (  # noqa: E402
+    extract_amounts,
+    find_payment_amount,
+    format_som,
 )
 from services.gift_delivery import deliver_gift, extract_gift_id  # noqa: E402
 
@@ -671,6 +679,192 @@ def test_admin_card_settings_flow() -> None:
     ok("DB'da egasi", holder == "ALI VALIYEV", holder)
 
 
+def test_card_auto_payment() -> None:
+    print("== 9. karta avtomatik to'lovi ==")
+
+    # 9.1 summa ajratish formatlari
+    ok("bo'shliqli summa",
+       find_payment_amount("Hisobingizga 10 037 so'm tushdi", {10037}) == 10037)
+    ok("uzluksiz summa",
+       find_payment_amount("To'lov: 10037 so'm", {10037}) == 10037)
+    ok("vergulli summa",
+       find_payment_amount("10,037 UZS keldi", {10037}) == 10037)
+    ok("NBSP bilan summa",
+       find_payment_amount("Balans: 10\u00a0037 so'm", {10037}) == 10037)
+    ok("karta raqami summani buzmaydi",
+       find_payment_amount("8600 1234 5678 9012 -> 10 037 so'm", {10037}) == 10037)
+    ok("mos kelmagan summa -> None",
+       find_payment_amount("5 000 so'm", {10037}) is None)
+    ok("noaniq holat (2 nomzod) -> None",
+       find_payment_amount("5 000 va 6 000", {5000, 6000}) is None)
+    ok("format_som", format_som(10037) == "10 037", format_som(10037))
+    ok("extract_amounts tartibi",
+       extract_amounts("10 037 so'm, keyin 25 000") == [10037, 25000])
+
+    # 9.2 unikal summa bilan so'rov yaratish (avtomatik rejim yoqilgan)
+    old_chat = settings.CARD_LOG_CHAT_ID
+    settings.CARD_LOG_CHAT_ID = -100777
+
+    auto_user = USER_ID + 2
+    base = 100 * settings.SOM_PER_STAR
+
+    async def _prepare() -> None:
+        await UserRepository.get_or_create_user(auto_user, "karim", "Karim", None)
+        await SettingsRepository.update_setting(
+            SETTING_CARD_NUMBER, "8600123456789012"
+        )
+        await SettingsRepository.update_setting(SETTING_CARD_HOLDER, "ALI VALIYEV")
+
+    asyncio.run(_prepare())
+
+    state = FakeState()
+    amount_msg = FakeMessage(user_id=auto_user, text="100")
+    asyncio.run(topup.topup_amount(amount_msg, state))
+
+    text = amount_msg.answers[0][0]
+    ok("summa so'mda ko'rsatildi", "so'm" in text and "unikal kod" in text, text)
+    ok("state'da deposit_id", bool(state.data.get("deposit_id")))
+    pay_amount = int(state.data.get("pay_amount") or 0)
+    ok("unikal kod 1..99", 1 <= pay_amount - base <= 99, str(pay_amount))
+
+    deposit_id = int(state.data["deposit_id"])
+
+    async def _deposit(_id: int):
+        return await DepositRepository.get_deposit(_id)
+
+    deposit = asyncio.run(_deposit(deposit_id))
+    ok("so'rov pending va summa bilan",
+       deposit is not None
+       and deposit.status == DEPOSIT_PENDING
+       and deposit.pay_amount == pay_amount)
+
+    # 9.3 bir xil miqdorda kod takrorlanmaydi
+    second_state = FakeState()
+    second_msg = FakeMessage(user_id=auto_user, text="100")
+    asyncio.run(topup.topup_amount(second_msg, second_state))
+    ok("ikkinchi so'rovda boshqa summa",
+       second_state.data.get("pay_amount") != pay_amount,
+       f"{second_state.data.get('pay_amount')} == {pay_amount}")
+
+    # 9.4 jurnal chati orqali avtomatik tasdiqlash
+    log_bot = FakeBot()
+    log_msg = FakeMessage(
+        user_id=1,
+        bot=log_bot,
+        text=f"Kartangizga {format_som(pay_amount)} so'm o'tkazildi",
+    )
+    log_msg.chat.id = -100777
+
+    asyncio.run(card_auto.on_card_log_message(log_msg))
+
+    async def _balance() -> int:
+        user = await UserRepository.get_user(auto_user)
+        return user.stars_balance if user else -1
+
+    ok("balans avtomatik +100", asyncio.run(_balance()) == 100, str(asyncio.run(_balance())))
+    deposit = asyncio.run(_deposit(deposit_id))
+    ok("so'rov approved (tizim)",
+       deposit.status == DEPOSIT_APPROVED
+       and deposit.admin_id == AUTO_DEPOSIT_ADMIN_ID)
+    ok("jurnal matni saqlandi", bool(deposit.payment_comment))
+    ok("foydalanuvchiga xabar",
+       any(chat == auto_user and "+100" in text for chat, text, _ in log_bot.messages))
+    ok("adminlarga hisobot",
+       sum(1 for chat, _, _ in log_bot.messages if chat in settings.ADMIN_IDS) == 2)
+
+    # 9.5 takroriy xabar -> balans o'zgarmaydi
+    repeat_bot = FakeBot()
+    repeat_msg = FakeMessage(
+        user_id=1,
+        bot=repeat_bot,
+        text=f"Kartangizga {format_som(pay_amount)} so'm o'tkazildi",
+    )
+    repeat_msg.chat.id = -100777
+    asyncio.run(card_auto.on_card_log_message(repeat_msg))
+    ok("takroriy to'lov hisoblanmadi", asyncio.run(_balance()) == 100)
+    ok("takroriy xabarda hech kimga yozilmadi", repeat_bot.messages == [])
+
+    # 9.5b kanal posti orqali ham avtomatik tasdiqlanadi
+    ok("kanal posti handleri ro'yxatda",
+       bool(card_auto.router.channel_post.handlers))
+    second_pay = int(second_state.data["pay_amount"])
+    channel_bot = FakeBot()
+    channel_post = FakeMessage(
+        user_id=1,
+        bot=channel_bot,
+        text=f"Karta to'lovi: {format_som(second_pay)} so'm",
+    )
+    channel_post.chat.id = -100777
+    asyncio.run(card_auto.on_card_log_channel_post(channel_post))
+    ok("kanal posti: ikkinchi so'rov +100", asyncio.run(_balance()) == 200)
+
+    # 9.6 mos kelmagan xabar e'tiborsiz
+    other_bot = FakeBot()
+    other_msg = FakeMessage(user_id=1, bot=other_bot, text="Balans: 999 so'm")
+    other_msg.chat.id = -100777
+    asyncio.run(card_auto.on_card_log_message(other_msg))
+    ok("mos summasiz xabar o'tkazildi", other_bot.messages == [])
+
+    # 9.7 middleware jurnal chatini obunadan ozod qiladi
+    import middlewares.subscription as sub_mw
+
+    async def _mw_case() -> str:
+        original = sub_mw.get_active_channel_dicts
+
+        async def _channels():
+            return [{"chat_id": -1, "title": "K", "invite_link": "x"}]
+
+        sub_mw.get_active_channel_dicts = _channels
+        try:
+            mw = sub_mw.SubscriptionMiddleware()
+
+            async def _handler(event, data):
+                return "HANDLED"
+
+            data = {"bot": FakeBot(), "event_from_user": log_msg.from_user}
+            return await mw(_handler, log_msg, data)
+        finally:
+            sub_mw.get_active_channel_dicts = original
+
+    ok("jurnal chati middleware'dan o'tdi", asyncio.run(_mw_case()) == "HANDLED")
+
+    # 9.8 avtomatik tasdiqlangandan keyin chek -> xabar
+    auto_state = FakeState()
+    auto_state.data = {"amount": 100, "deposit_id": deposit_id}
+    late_photo = FakeMessage(
+        user_id=auto_user, photo=[SimpleNamespace(file_id="late-receipt")]
+    )
+    asyncio.run(topup.topup_receipt_photo(late_photo, auto_state))
+    ok("kech kelgan chek: allaqachon tasdiqlangan",
+       any("allaqachon avtomatik tasdiqlangan" in text for text, _ in late_photo.answers))
+    ok("kech kelgan chek adminlarga yuborilmadi", late_photo.bot.photos == [])
+
+    # 9.9 zaxira yo'l: chek + admin
+    fallback_state = FakeState()
+    fallback_amount = FakeMessage(user_id=auto_user, text="50")
+    asyncio.run(topup.topup_amount(fallback_amount, fallback_state))
+    fallback_photo = FakeMessage(
+        user_id=auto_user, photo=[SimpleNamespace(file_id="receipt-fallback")]
+    )
+    asyncio.run(topup.topup_receipt_photo(fallback_photo, fallback_state))
+    ok("chek qabul qilindi",
+       any("Chek qabul qilindi" in text for text, _ in fallback_photo.answers))
+    ok("adminlarga 2 ta rasm", len(fallback_photo.bot.photos) == 2)
+    markup = fallback_photo.bot.photos[0][2].get("reply_markup")
+    ok("zaxira: tasdiqlash/rad etish",
+       markup.inline_keyboard[0][0].callback_data.startswith("dep_approve_"))
+    ok("zaxira: state tozalandi", fallback_state.state is None)
+
+    fb_id = int(markup.inline_keyboard[0][0].callback_data.rsplit("_", 1)[-1])
+    fb_deposit = asyncio.run(_deposit(fb_id))
+    ok("zaxira so'rov pending + chek biriktirildi",
+       fb_deposit is not None
+       and fb_deposit.status == DEPOSIT_PENDING
+       and fb_deposit.receipt_file_id == "receipt-fallback")
+
+    settings.CARD_LOG_CHAT_ID = old_chat
+
+
 def main() -> None:
     test_emoji_loader()
     test_button_registry()
@@ -682,6 +876,7 @@ def main() -> None:
     test_shop_auto_gift_on_payment()
     test_admin_button_editor_extracts_emoji()
     test_admin_card_settings_flow()
+    test_card_auto_payment()
     print(f"\nBARCHA TESTLAR O'TDI: {PASSED} ta tekshiruv")
 
 

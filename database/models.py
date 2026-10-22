@@ -423,6 +423,19 @@ class DepositRequest(Base):
     amount: Mapped[int] = mapped_column(
         BIGINT, nullable=False, comment="To'ldiriladigan Stars miqdori"
     )
+    pay_amount: Mapped[int | None] = mapped_column(
+        BIGINT,
+        nullable=True,
+        comment=(
+            "Aynan to'lanadigan summa (so'm): stars*SOM_PER_STAR + 1..99 "
+            "unikal kod. Avtomatik to'lov shu summa bo'yicha topiladi"
+        ),
+    )
+    payment_comment: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Avtomatik tasdiqlashda jurnal xabari (audit uchun)",
+    )
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", comment="pending/approved/rejected"
     )
@@ -448,6 +461,7 @@ class DepositRequest(Base):
         CheckConstraint("amount > 0", name="ck_deposits_amount_positive"),
         Index("ix_deposits_status", "status"),
         Index("ix_deposits_user_created", "user_id", "created_at"),
+        Index("ix_deposits_pay_amount", "pay_amount"),
     )
 
 

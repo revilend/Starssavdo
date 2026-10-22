@@ -184,21 +184,39 @@ yoki `custom_emoji_id` raqamini kiritish;
 O'zgarishlar `settings` jadvalida `btn:<key>:text` / `btn:<key>:icon`
 sifatida saqlanadi va darhol barcha klaviaturalarga qo'llanadi.
 
-## Karta orqali balans to'ldirish (UZCARD / HUMO)
+## Karta orqali balans to'ldirish (UZCARD / HUMO) — 100% avtomatik
 
 1. Admin panel → **⭐️ Referal narxini sozlash** → **💳 To'lov kartasi**:
    karta raqami (16–19 raqam) va egasi kiritiladi
    (`payment_card_number`, `payment_card_holder`).
-2. Foydalanuvchi **💳 Balans to'ldirish** → miqdorni kiritadi (min 10 ⭐️)
-   → karta rekvizitlari ko'rsatiladi → to'lov chekini rasm qilib yuboradi.
-3. Bot chekni barcha adminlarga **[✅ Tasdiqlash] / [❌ Rad etish]** bilan
-   yuboradi. Tasdiqlanganda balans **atomik** to'ldiriladi
-   (`deposits` jadvali, `deposit` audit yozuvi) va foydalanuvchiga xabar
-   boradi. Rad etilsa balans o'zgarmaydi.
-4. Ikki marta tasdiqlab bo'lmaydi — so'rov `pending` holatidan chiqadi.
+2. Foydalanuvchi **💳 Balans to'ldirish** → Stars miqdorini kiritadi
+   (min 10 ⭐️). Bot summani hisoblaydi:
+   `stars × SOM_PER_STAR + 1..99 so'm unikal kod` (masalan 100 ⭐️ va
+   `SOM_PER_STAR=250` → **25 037 so'm**). Unikal kod takrorlanmaydi.
+3. Foydalanuvchi aynan shu summani kartaga o'tkazadi. `@CardXabarBot` /
+   `@HUMOcardbot` xabari `CARD_LOG_CHAT_ID` chatiga tushganda bot matndan
+   summani ajratadi (`10 037`, `10037`, `10,037`, NBSP — barchasi) va
+   `pending` so'rovni topib balansni **admin aralashuvisiz atomik**
+   to'ldiradi (`deposits` + `deposit` audit yozuvi), foydalanuvchiga xabar
+   yuboradi.
+4. Zaxira yo'l: foydalanuvchi chek skrinshotini yuborsa, chek o'sha
+   so'rovga biriktiriladi va barcha adminlarga **[✅ Tasdiqlash] /
+   [❌ Rad etish]** bilan boradi. Rad etilsa balans o'zgarmaydi.
+5. Ikki marta hisoblanmaydi — so'rov `pending` holatidan chiqadi
+   (avtomatik tasdiqlash ham, admin tasdig'i ham idempotent).
 
-`deposits` jadvali startupda `ensure_schema()` orqali avtomatik yaratiladi
-(mavjud jadvallarga tegmaydi).
+Sozlash: `SOM_PER_STAR` (1 ⭐️ narxi, so'm) va `CARD_LOG_CHAT_ID` (jurnal
+chati ID; `0` — avtomatik tasdiqlash o'chirilgan).
+
+> **Telegram cheklovi:** botlar boshqa botlar yuborgan **guruh** xabarlarini
+> olmaydi. Shuning uchun jurnal sifatida **kanal** ishlating (bank boti
+> kanalga post qiladi, bizning bot kanal admini bo'ladi) yoki to'lov
+> xabarini botga qo'lda forward qiling. Bu holatda ham chek + admin yo'li
+> ishlaydi.
+
+`deposits` jadvali va yangi ustunlar (`pay_amount`, `payment_comment`)
+startupda `ensure_schema()` orqali avtomatik yaratiladi/qo'shiladi — mavjud
+ma'lumotlarga tegmaydi.
 
 ## Giftlarni avtomatik yuborish (`sendGift`)
 

@@ -37,6 +37,7 @@ Ishlatish misoli:
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final, NamedTuple
@@ -108,6 +109,13 @@ SETTING_CARD_HOLDER: Final[str] = "payment_card_holder"
 DEPOSIT_PENDING: Final[str] = "pending"
 DEPOSIT_APPROVED: Final[str] = "approved"
 DEPOSIT_REJECTED: Final[str] = "rejected"
+
+# Avtomatik karta to'lovi (jurnal chati orqali)
+# `admin_id=0` — so'rov admin emas, tizim tomonidan tasdiqlangan.
+AUTO_DEPOSIT_ADMIN_ID: Final[int] = 0
+DEPOSIT_CODE_MIN: Final[int] = 1
+DEPOSIT_CODE_MAX: Final[int] = 99
+DEPOSIT_CODE_ATTEMPTS: Final[int] = 30
 
 # Referal velocity (nakrutka) tekshiruvi
 VELOCITY_WINDOW: Final[timedelta] = timedelta(hours=1)  # so'nggi 1 soat
@@ -1330,9 +1338,14 @@ class DepositRepository:
         user_id: int,
         amount: int,
         receipt_file_id: str | None = None,
+        pay_amount: int | None = None,
     ) -> DepositRequest:
         """
         Yangi `pending` to'ldirish so'rovini yaratadi (balans hali tegmaydi).
+
+        Args:
+            pay_amount: aynan to'lanadigan summa (so'm). Avtomatik to'lov
+                shu summa bo'yicha topiladi; `None` bo'lsa faqat chek + admin.
 
         Raises:
             ValueError: amount <= 0.
@@ -1351,14 +1364,172 @@ class DepositRepository:
                 amount=amount,
                 status=DEPOSIT_PENDING,
                 receipt_file_id=receipt_file_id,
+                pay_amount=pay_amount,
             )
             session.add(deposit)
             await session.flush()
             logger.info(
-                "Deposit so'rovi yaratildi: id=%s user=%s amount=%s",
-                deposit.id, user_id, amount,
+                "Deposit so'rovi yaratildi: id=%s user=%s amount=%s pay=%s",
+                deposit.id, user_id, amount, pay_amount,
             )
             return deposit
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def create_deposit_with_unique_sum(
+        user_id: int,
+        amount: int,
+        som_per_star: int,
+        receipt_file_id: str | None = None,
+    ) -> DepositRequest:
+        """
+        Unikal to'lov summasi bilan `pending` so'rov yaratadi.
+
+        Summa = `amount * som_per_star` + 1..99 so'm "kod". Kod boshqa
+        `pending` so'rovlar bilan takrorlanmasligi tekshiriladi (30 urinish).
+
+        Raises:
+            ValueError: amount <= 0 yoki som_per_star <= 0.
+            RepositoryError: foydalanuvchi topilmadi / bo'sh kod topilmadi.
+        """
+        if amount <= 0:
+            raise ValueError("Miqdor 0 dan katta bo'lishi kerak")
+        if som_per_star <= 0:
+            raise ValueError("som_per_star 0 dan katta bo'lishi kerak")
+
+        base = amount * som_per_star
+
+        async with get_session() as session:
+            user = await session.get(User, user_id, with_for_update=True)
+            if user is None:
+                raise RepositoryError(f"Foydalanuvchi {user_id} topilmadi")
+
+            pay_amount: int | None = None
+            for _ in range(DEPOSIT_CODE_ATTEMPTS):
+                code = DEPOSIT_CODE_MIN + secrets.randbelow(
+                    DEPOSIT_CODE_MAX - DEPOSIT_CODE_MIN + 1
+                )
+                candidate = base + code
+                taken = await session.scalar(
+                    select(DepositRequest.id).where(
+                        DepositRequest.status == DEPOSIT_PENDING,
+                        DepositRequest.pay_amount == candidate,
+                    )
+                )
+                if taken is None:
+                    pay_amount = candidate
+                    break
+
+            if pay_amount is None:
+                raise RepositoryError(
+                    "Unikal to'lov summasini tanlab bo'lmadi — keyinroq urinib ko'ring"
+                )
+
+            deposit = DepositRequest(
+                user_id=user_id,
+                amount=amount,
+                status=DEPOSIT_PENDING,
+                receipt_file_id=receipt_file_id,
+                pay_amount=pay_amount,
+            )
+            session.add(deposit)
+            await session.flush()
+            logger.info(
+                "Deposit (unikal summa) yaratildi: id=%s user=%s amount=%s pay=%s",
+                deposit.id, user_id, amount, pay_amount,
+            )
+            return deposit
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def attach_receipt(
+        deposit_id: int, receipt_file_id: str
+    ) -> DepositRequest | None:
+        """
+        Mavjud so'rovga chek `file_id`sini biriktiradi (holat o'zgarmaydi).
+
+        Avtomatik tasdiqlangan so'rovga chek biriktirilmaydi — chaqiruvchi
+        `deposit.status` ni tekshirib foydalanuvchiga xabar beradi.
+        """
+        async with get_session() as session:
+            deposit = await session.get(
+                DepositRequest, deposit_id, with_for_update=True
+            )
+            if deposit is None:
+                return None
+            if deposit.status == DEPOSIT_PENDING:
+                deposit.receipt_file_id = receipt_file_id
+                await session.flush()
+            return deposit
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def auto_confirm_deposit(
+        pay_amount: int,
+        comment: str | None = None,
+    ) -> tuple[DepositRequest, int] | None:
+        """
+        Jurnal chatidagi to'lovni summa bo'yicha ATOMIK tasdiqlaydi.
+
+        Bitta tranzaksiyada `pending` so'rov qidiriladi (summa bo'yicha),
+        balans +amount, `deposit` audit yozuvi, status -> approved,
+        `admin_id=AUTO_DEPOSIT_ADMIN_ID`.
+
+        Returns:
+            (deposit, yangi_balans) — so'rov topildi va tasdiqlandi;
+            None — bunday summa bilan `pending` so'rov yo'q (yoki allaqachon
+            tasdiqlangan) — balans tegilmaydi.
+        """
+        if pay_amount <= 0:
+            return None
+
+        async with get_session() as session:
+            deposit = await session.scalar(
+                select(DepositRequest)
+                .where(
+                    DepositRequest.status == DEPOSIT_PENDING,
+                    DepositRequest.pay_amount == pay_amount,
+                )
+                .order_by(DepositRequest.created_at.asc())
+                .limit(1)
+                .with_for_update()
+            )
+            if deposit is None:
+                return None
+
+            user = await session.get(User, deposit.user_id, with_for_update=True)
+            if user is None:
+                raise RepositoryError(
+                    f"Foydalanuvchi {deposit.user_id} topilmadi (balans qo'shilmadi)"
+                )
+
+            user.stars_balance += deposit.amount
+            session.add(
+                TransactionRow(
+                    user_id=user.user_id,
+                    amount=deposit.amount,
+                    tx_type=TX_DEPOSIT,
+                    description=(
+                        "Karta orqali avtomatik to'ldirish "
+                        f"(deposit #{deposit.id}, {pay_amount} so'm)"
+                    ),
+                    reference_id=str(deposit.id),
+                )
+            )
+
+            deposit.status = DEPOSIT_APPROVED
+            deposit.admin_id = AUTO_DEPOSIT_ADMIN_ID
+            deposit.processed_at = utcnow()
+            if comment:
+                deposit.payment_comment = comment[:1000]
+            await session.flush()
+
+            logger.info(
+                "Deposit avtomatik tasdiqlandi: id=%s user=%s amount=%s pay=%s -> %s",
+                deposit.id, deposit.user_id, deposit.amount, pay_amount,
+                user.stars_balance,
+            )
+            return deposit, user.stars_balance
 
     # ------------------------------------------------------------------
     @staticmethod

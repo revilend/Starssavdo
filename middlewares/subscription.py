@@ -65,6 +65,8 @@ _UPDATE_FIELDS: tuple[str, ...] = (
     "message",
     "callback_query",
     "edited_message",
+    "channel_post",
+    "edited_channel_post",
     "business_message",
     "edited_business_message",
     "pre_checkout_query",
@@ -119,6 +121,14 @@ def _event_user(event: TelegramObject) -> Any:
     return getattr(event, "from_user", None)
 
 
+def _event_chat_id(event: TelegramObject) -> int | None:
+    """Hodisadan chat ID'sini ajratib oladi (Message/CallbackQuery)."""
+    chat = getattr(event, "chat", None) or getattr(
+        getattr(event, "message", None), "chat", None
+    )
+    return getattr(chat, "id", None)
+
+
 class SubscriptionMiddleware(BaseMiddleware):
     """
     Har bir hodisadan oldin majburiy kanallar a'zoligini tekshiradi.
@@ -141,6 +151,14 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         # Hodisa turi noma'lum (masalan, faqat `my_chat_member`) — o'tkazamiz
         if inner is None:
+            return await handler(event, data)
+
+        # 0.1) Karta to'lovlari jurnali (`CARD_LOG_CHAT_ID`) — obuna tekshiruvisiz,
+        # chunki u yerda foydalanuvchi emas, to'lov boti/bank xabarlari keladi.
+        if (
+            settings.CARD_LOG_CHAT_ID
+            and _event_chat_id(inner) == settings.CARD_LOG_CHAT_ID
+        ):
             return await handler(event, data)
 
         user = data.get("event_from_user") or _event_user(inner)

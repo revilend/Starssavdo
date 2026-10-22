@@ -9,13 +9,15 @@ Oqim:
         (`payment_card_number`, `payment_card_holder`);
       - foydalanuvchidan Stars miqdori so'raladi
         (`TopupStates.waiting_for_amount`).
- 2. Miqdor tekshiriladi (10..1 000 000) va karta raqami ko'rsatiladi;
-    foydalanuvchidan to'lov cheki (rasm) so'raladi
-    (`TopupStates.waiting_for_receipt`).
- 3. Chek kelganda `DepositRepository.create_deposit` orqali `pending`
-    so'rov yaratiladi va **barcha adminlarga** rasm + [✅ Tasdiqlash] /
-    [❌ Rad etish] tugmalari bilan yuboriladi.
- 4. Admin tasdiqlasa — balans avtomatik qo'shiladi
+ 2. Miqdor tekshiriladi (10..1 000 000) va `stars * SOM_PER_STAR + 1..99`
+    unikal summa bilan `pending` so'rov yaratiladi; karta raqami va aynan
+    to'lanadigan summa ko'rsatiladi (`TopupStates.waiting_for_receipt`).
+ 3. To'lov jurnali (`CARD_LOG_CHAT_ID`) orqali summa aniqlansa — balans
+    **avtomatik** qo'shiladi (`handlers/user/card_auto.py`).
+ 4. Chek (skrinshot) yuborilsa — u mavjud so'rovga biriktiriladi va
+    **barcha adminlarga** rasm + [✅ Tasdiqlash] / [❌ Rad etish] tugmalari
+    bilan yuboriladi (zaxira yo'l).
+ 5. Admin tasdiqlasa — balans atomik qo'shiladi
     (`handlers/admin/deposits.py`).
 
 Xavfsizlik:
@@ -37,6 +39,8 @@ from aiogram.types import CallbackQuery, Message
 
 from config.settings import settings
 from database.queries import (
+    DEPOSIT_APPROVED,
+    DEPOSIT_REJECTED,
     SETTING_CARD_HOLDER,
     SETTING_CARD_NUMBER,
     DepositRepository,
@@ -51,6 +55,7 @@ from keyboards.inline import (
     get_topup_cancel_kb,
 )
 from services.button_registry import ButtonText
+from services.card_payment import format_som
 from states.topup_states import TopupStates
 
 logger = logging.getLogger(__name__)
@@ -176,18 +181,55 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
         await message.answer(NO_CARD_TEXT)
         return
 
-    await state.update_data(amount=amount)
+    # Unikal summa bilan so'rov yaratamiz: `stars * SOM_PER_STAR + 1..99`.
+    # To'lov avtomatik aniqlanishi uchun so'rov to'lovdan OLDIN bazada bo'lishi
+    # shart. Jurnal chat sozlanmagan bo'lsa (CARD_LOG_CHAT_ID=0) avtomatik
+    # tasdiqlash o'chirilgan — so'rov faqat chek kelganda yaratiladi.
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    deposit = None
+    if settings.CARD_LOG_CHAT_ID:
+        try:
+            deposit = await DepositRepository.create_deposit_with_unique_sum(
+                user_id=user_id,
+                amount=amount,
+                som_per_star=settings.SOM_PER_STAR,
+            )
+        except (RepositoryError, ValueError) as exc:
+            logger.warning("Unikal summa yaratilmadi (user=%s): %s", user_id, exc)
+
+    await state.update_data(
+        amount=amount,
+        deposit_id=deposit.id if deposit else None,
+        pay_amount=deposit.pay_amount if deposit else None,
+    )
     await state.set_state(TopupStates.waiting_for_receipt)
 
     holder_line = f"\n👤 Egasi: <b>{html.escape(holder)}</b>" if holder else ""
+
+    sum_block = ""
+    auto_line = "⚠️ Chek yuborilmaguncha balans qo'shilmaydi."
+    if deposit and deposit.pay_amount:
+        code = deposit.pay_amount - amount * settings.SOM_PER_STAR
+        sum_block = (
+            "\n💵 To'lov summasi: "
+            f"<b>{format_som(deposit.pay_amount)} so'm</b>\n"
+            f"<i>({amount} ⭐️ = {format_som(amount * settings.SOM_PER_STAR)} "
+            f"so'm + {code} so'm unikal kod)</i>\n"
+        )
+        auto_line = (
+            "✅ Aynan yuqoridagi summani o'tkazing — to'lov jurnal orqali "
+            "<b>avtomatik</b> tasdiqlanadi (admin kutilmaydi).\n"
+            "🧾 Chek (skrinshot) yuborsangiz ham bo'ladi — u zaxira "
+            "tekshiruv sifatida adminlarga boradi."
+        )
+
     await message.answer(
         "🧾 <b>To'lov cheki</b>\n\n"
-        f"To'ldiriladigan miqdor: <b>{amount} ⭐️</b>\n\n"
+        f"To'ldiriladigan miqdor: <b>{amount} ⭐️</b>\n"
+        f"{sum_block}\n"
         "Quyidagi kartaga o'tkazma qiling:\n"
         f"💳 <code>{_format_card_number(number)}</code>{holder_line}\n\n"
-        "To'lovni amalga oshirgach, <b>chekni (skrinshot)</b> shu chatga "
-        "rasm qilib yuboring.\n\n"
-        "⚠️ Chek yuborilmaguncha balans qo'shilmaydi.",
+        f"{auto_line}",
         parse_mode="HTML",
         reply_markup=get_topup_cancel_kb(),
     )
@@ -199,9 +241,15 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
 async def _submit_receipt(
     message: Message, state: FSMContext, file_id: str
 ) -> None:
-    """Chekni qabul qiladi, `pending` deposit yaratadi va adminlarga yuboradi."""
+    """
+    Chekni qabul qiladi va uni mavjud so'rovga biriktiradi (zaxira yo'l).
+
+    So'rov miqdor kiritilganda yaratilgan bo'ladi (`deposit_id` state'da).
+    Agar u allaqachon avtomatik tasdiqlangan bo'lsa — chek qabul qilinmaydi.
+    """
     data = await state.get_data()
     amount = int(data.get("amount", 0))
+    deposit_id = data.get("deposit_id")
 
     if amount <= 0:
         await state.clear()
@@ -212,12 +260,17 @@ async def _submit_receipt(
         return
 
     user = message.from_user
+    deposit = None
     try:
-        deposit = await DepositRepository.create_deposit(
-            user_id=user.id,
-            amount=amount,
-            receipt_file_id=file_id,
-        )
+        if deposit_id:
+            deposit = await DepositRepository.attach_receipt(int(deposit_id), file_id)
+        if deposit is None:
+            deposit = await DepositRepository.create_deposit(
+                user_id=user.id,
+                amount=amount,
+                receipt_file_id=file_id,
+                pay_amount=data.get("pay_amount"),
+            )
     except (RepositoryError, ValueError) as exc:
         logger.warning("Deposit yaratishda xatolik: %s", exc)
         await message.answer(
@@ -226,19 +279,45 @@ async def _submit_receipt(
         )
         return
 
+    if deposit.status == DEPOSIT_APPROVED:
+        await state.clear()
+        await message.answer(
+            "✅ <b>Bu to'lov allaqachon avtomatik tasdiqlangan!</b>\n\n"
+            f"├ Miqdor: <b>+{deposit.amount} ⭐️</b>\n"
+            f"└ So'rov: <code>#{deposit.id}</code>\n\n"
+            "Balansingiz to'ldirilgan — chek yuborish shart emas."
+        )
+        return
+
+    if deposit.status == DEPOSIT_REJECTED:
+        await state.clear()
+        await message.answer(
+            "❌ <b>Bu so'rov allaqachon rad etilgan.</b>\n\n"
+            "Yangi to'ldirish uchun \"💳 Balans to'ldirish\" tugmasini "
+            "qaytadan bosing."
+        )
+        return
+
     await state.clear()
 
+    som_line = (
+        f"├ To'lov summasi: <b>{format_som(deposit.pay_amount)} so'm</b>\n"
+        if deposit.pay_amount
+        else ""
+    )
     await message.answer(
         "✅ <b>Chek qabul qilindi!</b>\n\n"
         f"├ Miqdor: <b>{amount} ⭐️</b>\n"
+        f"{som_line}"
         f"├ So'rov: <code>#{deposit.id}</code>\n"
         "└ Holat: 🕓 <i>admin tekshiruvi kutilmoqda</i>\n\n"
-        "Tasdiqlangach balansingiz avtomatik to'ldiriladi."
+        "To'lov jurnal orqali kelganda balans <b>avtomatik</b> qo'shiladi; "
+        "aks holda admin chekni tasdiqlaydi."
     )
 
     await _notify_admins_about_deposit(message, deposit, amount)
     logger.info(
-        "Deposit so'rovi yuborildi: id=%s user=%s amount=%s",
+        "Deposit cheki qabul qilindi: id=%s user=%s amount=%s",
         deposit.id, user.id, amount,
     )
 
@@ -286,10 +365,17 @@ async def _notify_admins_about_deposit(
     else:
         who = html.escape(user.first_name or str(user.id))
 
+    pay_amount = getattr(deposit, "pay_amount", None)
+    pay_line = (
+        f"├ To'lov summasi: <b>{format_som(pay_amount)} so'm</b>\n"
+        if pay_amount
+        else ""
+    )
     caption = (
         "💳 <b>YANGI BALANS TO'LDIRISH SO'ROVI</b>\n\n"
         f"├ Foydalanuvchi: {who} (ID <code>{user.id}</code>)\n"
         f"├ Miqdor: <b>{amount} ⭐️</b>\n"
+        f"{pay_line}"
         f"└ So'rov: <code>#{deposit.id}</code>\n\n"
         "Chekni tekshirib, qaror qabul qiling 👇"
     )

@@ -41,6 +41,12 @@ services:
       # Telegram secret_token (A-Za-z0-9_- ; masalan: openssl rand -hex 32)
       - key: WEBHOOK_SECRET
         sync: false
+      # Karta to'lovida 1 Stars narxi (so'm) — unikal summa hisobi uchun
+      - key: SOM_PER_STAR
+        value: 250
+      # Karta to'lovlari jurnali (yopiq guruh/kanal ID); 0 — o'chirilgan
+      - key: CARD_LOG_CHAT_ID
+        sync: false
       # Ish rejimi: webhook (Render) yoki polling (lokal)
       - key: BOT_MODE
         value: webhook

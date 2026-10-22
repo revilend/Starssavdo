@@ -8,6 +8,7 @@ Modullar:
  - button_registry : tugma matni/rangi/emojisi (DB'siz, sof)
  - button_store    : tugma override'larini settings jadvalida saqlash
  - gift_delivery   : Telegram sovg'alarini avtomatik yuborish (sendGift)
+ - card_payment    : karta to'lovi jurnal xabaridan summani aniqlash
 
 Diqqat: bu fayl ataylab modul qayta eksport qilmaydi — `services` paketini
 import qilish (masalan `services.button_registry`) og'ir DB/config

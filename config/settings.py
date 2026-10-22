@@ -87,6 +87,24 @@ class Settings(BaseSettings):
         ge=1,
     )
 
+    SOM_PER_STAR: int = Field(
+        default=250,
+        description=(
+            "Karta to'lovida 1 ⭐️ narxi (so'm). To'lov summasi "
+            "`stars * SOM_PER_STAR + 1..99` unikal kod sifatida hisoblanadi"
+        ),
+        ge=1,
+    )
+
+    CARD_LOG_CHAT_ID: int = Field(
+        default=0,
+        description=(
+            "Karta to'lovlari jurnali (yopiq guruh/kanal) ID. Shu chatga "
+            "@CardXabarBot / @HUMOcardbot yuborgan to'lov xabarlari avtomatik "
+            "o'qiladi. 0 — avtomatik tasdiqlash o'chirilgan (faqat chek + admin)"
+        ),
+    )
+
     # ------------------------- Webhook / Server -----------------
     BOT_MODE: str = Field(
         default="webhook",
