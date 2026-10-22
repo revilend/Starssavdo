@@ -1,0 +1,37 @@
+# =============================================================
+# Render Blueprint — @nftyutbot
+# =============================================================
+# Ishga tushirish:
+#   1) Render Dashboard -> "New" -> "Blueprint"
+#   2) Repozitoriy: https://github.com/revilend/Starssavdo
+#   3) "sync: false" deb belgilangan o'zgaruvchilarni (BOT_TOKEN,
+#      ADMIN_IDS, DATABASE_URL) dashboard orqali qo'lda kiritasiz.
+#
+# Bot Render'da doimiy ishlashi uchun:
+#   - "Free" web service portni ochib turishni talab qiladi — buni
+#     `main.py` dagi health check serveri (`/` va `/health` -> 200 OK)
+#     bajaradi.
+#   - `healthCheckPath` orqali Render ham har daqiqada o'zini tekshiradi.
+# =============================================================
+services:
+  - type: web
+    name: nftyutbot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      # BotFather'dan olingan bot tokeni (dashboard'ga qo'lda kiritiladi)
+      - key: BOT_TOKEN
+        sync: false
+      # Admin Telegram IDlari (vergul bilan ajratilgan)
+      - key: ADMIN_IDS
+        sync: false
+      # Supabase connection string (Transaction Pooler: port 6543)
+      - key: DATABASE_URL
+        sync: false
+      # Render Python versiyasi
+      - key: PYTHON_VERSION
+        value: 3.11.9

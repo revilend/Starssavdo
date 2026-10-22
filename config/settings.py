@@ -65,6 +65,14 @@ class Settings(BaseSettings):
         description="Supabase PostgreSQL connection string",
     )
 
+    DB_SSL: str = Field(
+        default="auto",
+        description=(
+            "PostgreSQL SSL (TLS) rejimi: 'auto' (Supabase/URL bo'yicha "
+            "avtomatik), 'require' (majburiy TLS) yoki 'disable'"
+        ),
+    )
+
     # ----------------------- Stars / Ekonomika ------------------
     REFERRAL_REWARD_STARS: int = Field(
         default=10,
