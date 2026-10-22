@@ -21,10 +21,16 @@ Arxitektura:
  - Endpointlar:
      | Manzil   | Javob                                              |
      |----------|----------------------------------------------------|
-     | GET /    | 200 — {"status": "ok", "bot": "@nftyutbot"}         |
+     | GET /    | 200 — `Bot ishlayapti` (oddiy matn)                |
      | GET /health | 200 — {"status": "ok", "bot": "@nftyutbot"}       |
      | POST /webhook | 200 — Telegram update Dispatcher'ga uzatiladi |
-   `/` va `/health` — Render health check + UptimeRobot keep-alive uchun.
+   `/` — dummy server funksiyasi (Render birinchi so'rovni shu yerga
+   yuboradi); `/health` — Render health check + UptimeRobot keep-alive.
+   Ikkala rejimda ham shu FastAPI server `0.0.0.0:$PORT` da tinglaydi —
+   polling'da alohida veb-server (aiohttp) ishga tushirish shart emas,
+   aks holda port ikki marta band bo'ladi; polling rejimida esa webhook
+   avval o'chiriladi (`delete_webhook`), keyin `dp.start_polling()`
+   shu loopda fon vazifasi bo'lib ishlaydi.
  - `/webhook` `X-Telegram-Bot-Api-Secret-Token` sarlavhasini tekshiradi
    (agar `WEBHOOK_SECRET` o'rnatilgan bo'lsa). Noto'g'ri token -> 403,
    buzilgan JSON -> 400, handlerdagi kutilmagan xato -> 500 (Telegram
@@ -59,7 +65,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from config.settings import settings
@@ -113,6 +119,9 @@ HEALTH_PAYLOAD: dict[str, str] = {"status": "ok", "bot": HEALTH_BOT_USERNAME}
 
 # Render port berilmagan holatda ishlatiladigan standart port.
 DEFAULT_PORT = 8080
+
+# `GET /` uchun oddiy matnli javob (dummy server funksiyasi).
+ROOT_TEXT = "Bot ishlayapti"
 
 # Telegram secret_token sarlavhasi (Telegram Bot API tomonidan yuboriladi).
 SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
@@ -352,6 +361,16 @@ app = FastAPI(
 
 
 @app.get("/", include_in_schema=False)
+async def root_handler() -> PlainTextResponse:
+    """
+    Dummy server funksiyasi: oddiy matnli javob.
+
+    Render deploy'i uchun ochiq portni eshitadigan server talab qilinadi —
+    shu FastAPI ilova shartni bajaradi va birinchi so'rovga matn qaytaradi.
+    """
+    return PlainTextResponse(ROOT_TEXT)
+
+
 @app.get("/health", include_in_schema=False)
 async def health_handler() -> dict[str, str]:
     """

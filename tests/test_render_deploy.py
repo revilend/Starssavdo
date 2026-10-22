@@ -93,11 +93,17 @@ async def _asgi_request(
 
     await app_main.app(scope, receive, send)
 
-    status = next(m["status"] for m in messages if m["type"] == "http.response.start")
+    start = next(m for m in messages if m["type"] == "http.response.start")
+    status = start["status"]
+    response_headers = {key: value for key, value in start.get("headers", [])}
+    content_type = response_headers.get(b"content-type", b"").decode()
     payload = b"".join(
         m.get("body", b"") for m in messages if m["type"] == "http.response.body"
     )
-    return status, (json.loads(payload) if payload else {})
+    if "application/json" in content_type:
+        return status, (json.loads(payload) if payload else {})
+    # `/` oddiy matn qaytaradi (dummy server funksiyasi)
+    return status, (payload.decode() if payload else "")
 
 
 def _request(method: str, path: str, **kwargs: Any) -> tuple[int, dict[str, Any]]:
@@ -188,11 +194,14 @@ def test_health_payload() -> None:
 
 
 def test_health_endpoints_return_200() -> None:
-    """`/` va `/health` manzillari 200 OK + JSON qaytaradi."""
-    for path in ("/", "/health"):
-        status, payload = _request("GET", path)
-        assert status == 200, f"{path} -> {status}"
-        assert payload == {"status": "ok", "bot": "@nftyutbot"}, f"{path} -> {payload}"
+    """`/` — oddiy matn, `/health` — 200 OK + JSON qaytaradi."""
+    status, root_body = _request("GET", "/")
+    assert status == 200, f"/ -> {status}"
+    assert root_body == app_main.ROOT_TEXT == "Bot ishlayapti", f"/ -> {root_body!r}"
+
+    status, payload = _request("GET", "/health")
+    assert status == 200, f"/health -> {status}"
+    assert payload == {"status": "ok", "bot": "@nftyutbot"}, f"/health -> {payload}"
 
 
 # ------------------------------------------------------------------

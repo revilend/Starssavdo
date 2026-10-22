@@ -138,9 +138,18 @@ production'da faqat `BOT_MODE=webhook` ishlating.
 
 | Manzil | Metod | Javob |
 |---|---|---|
-| `/` | GET | `200 {"status": "ok", "bot": "@nftyutbot"}` |
+| `/` | GET | `200` — `Bot ishlayapti` (oddiy matn) |
 | `/health` | GET | `200 {"status": "ok", "bot": "@nftyutbot"}` |
 | `/webhook` | POST | Telegram update → Dispatcher; `200 {"ok": true}` |
+
+`/` — dummy server funksiyasi: Render birinchi so'rovni shu yerga yuboradi,
+server ochiq portni eshitishi uchun shu yetarli. Ikkala rejimda
+(`BOT_MODE=webhook` va `polling`) shu FastAPI ilova `0.0.0.0:$PORT` da
+tinglaydi — alohida aiohttp server ishga tushirish shart emas (port ikki
+marta band bo'lardi). `polling` rejimida esa webhook avval o'chiriladi
+(`delete_webhook`), keyin `dp.start_polling()` shu loopda fon vazifasi
+bo'lib ishlaydi — alohida `render_polling.py` fayli shu sababdan olib
+tashlandi.
 
 `/webhook` xatti-harakatlari:
 
