@@ -480,6 +480,27 @@ class UserRepository:
             )
             return [int(uid) for uid in result.scalars().all()]
 
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def count_new_users_today() -> int:
+        """
+        Bugun (UTC kun boshidan) qo'shilgan foydalanuvchilar soni.
+
+        Admin statistikasidagi "📅 Bugun qo'shilganlar" uchun.
+        """
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        async with get_session() as session:
+            return int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(User)
+                    .where(User.created_at >= today_start)
+                )
+                or 0
+            )
+
 
 # =============================================================
 # 2. CHANNEL REPOSITORY (majburiy kanallar — OP)
@@ -498,6 +519,31 @@ class ChannelRepository:
                 .order_by(Channel.id)
             )
             return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_all_channels() -> list[Channel]:
+        """
+        Barcha kanallar (faol VA nofaol) — admin ro'yxatidagi holat
+        (✅/🚫 emoji) to'g'ri ko'rsatishi uchun.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(Channel).order_by(Channel.id)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_channel(channel_id: int) -> Channel | None:
+        """
+        Kanalni ID bo'yicha oladi (yoqish/o'chirish va o'chirish
+        tugmalari uchun — `delete_channel` ga chat_id kerak).
+
+        Returns: Channel | None (topilmagan bo'lsa None).
+        """
+        async with get_session() as session:
+            return await session.get(Channel, channel_id)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1051,6 +1097,46 @@ class OrderRepository:
 # =============================================================
 class WithdrawalRepository:
     """Yechib olish so'rovlari: hold -> approve / reject(+refund)."""
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_withdrawals(
+        status: str | None = None, limit: int = 20
+    ) -> list[Withdrawal]:
+        """
+        Yechib olish so'rovlarini ro'yxati (admin panel uchun).
+
+        Args:
+            status: 'pending' | 'approved' | 'rejected' — filtr (None = barchasi)
+            limit: maksimal natija soni (oxirgilari birinchi)
+
+        Returns: Withdrawal obyektlari — qo'shilgan vaqt bo'yicha kamayishda.
+        """
+        async with get_session() as session:
+            stmt = select(Withdrawal)
+            if status is not None:
+                stmt = stmt.where(Withdrawal.status == status)
+            result = await session.execute(
+                stmt.order_by(Withdrawal.created_at.desc()).limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def count_pending_withdrawals() -> int:
+        """
+        Kutilayotgan (status='pending') yechib olish so'rovlari soni —
+        admin statistikasidagi "⏳ Kutilayotgan..." uchun.
+        """
+        async with get_session() as session:
+            return int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Withdrawal)
+                    .where(Withdrawal.status == WITHDRAWAL_PENDING)
+                )
+                or 0
+            )
 
     # ------------------------------------------------------------------
     @staticmethod

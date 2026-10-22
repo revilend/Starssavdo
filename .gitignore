@@ -1,20 +1,51 @@
+# =============================================================
 # Python
+# =============================================================
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments (lokal va Render build uchun)
 .venv/
+.venv-*/
 venv/
+env/
+ENV/
 
+# =============================================================
 # Environment va maxfiy fayllar (hech qachon commit qilinmaydi)
+# =============================================================
 .env
-.env.local
+.env.*
+!.env.example
+*.pem
+*.key
 
-# Lokal test artefactlari
+# =============================================================
+# Test va lokal artefaktlar
+# =============================================================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 _local_pkgs/
 *.sqlite3
 *.sqlite3-journal
+*.db
 
+# Render
+.render/
+.render.yaml.lock
+
+# =============================================================
 # IDE / tizim
+# =============================================================
 .idea/
 .vscode/
 .DS_Store
+Thumbs.db
