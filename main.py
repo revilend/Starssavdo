@@ -1,8 +1,9 @@
 """
 main.py
 =======
-Telegram Stars, NFT, Premium, Mayda Giftlar va Referal boti (@nftyutbot)
-— Render.com da 24/7 ishlaydigan **webhook** kirish nuqtasi (FastAPI).
+NFT YUT — SO'MDA ishlaydigan Telegram bot: Premium, Stars, NFT va
+Mayda Giftlar do'koni, HUMO karta to'lovlari (@humocardbot) va referal.
+Render.com da 24/7 ishlaydigan **webhook** kirish nuqtasi (FastAPI).
 
 Arxitektura:
  - `FastAPI` ilova `uvicorn` orqali `0.0.0.0:$PORT` da ishlaydi
@@ -14,6 +15,9 @@ Arxitektura:
         komandalari** o'rnatiladi (`services/commands.py`:
         `setMyCommands` + `setChatMenuButton` — yozish satridagi menyu
         tugmasi).
+     1.5) Fon vazifalari: 5 daqiqalik to'lov muddatini yopuvchi
+        `expiry_worker` va (env'da sozlangan bo'lsa) `@humocardbot`
+        xabarlarini tinglovchi Telethon userbot.
      2) Webhook rejimida: `set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
         drop_pending_updates=True, secret_token=WEBHOOK_SECRET,
         allowed_updates=...)`.
@@ -26,7 +30,7 @@ Arxitektura:
      | Manzil   | Javob                                              |
      |----------|----------------------------------------------------|
      | GET /    | 200 — `Bot ishlayapti` (oddiy matn)                |
-     | GET /health | 200 — {"status": "ok", "bot": "@nftyutbot"}       |
+     | GET /health | 200 — {"status": "ok", "bot": "NFT YUT"}          |
      | POST /webhook | 200 — Telegram update Dispatcher'ga uzatiladi |
    `/` — dummy server funksiyasi (Render birinchi so'rovni shu yerga
    yuboradi); `/health` — Render health check + UptimeRobot keep-alive.
@@ -84,6 +88,7 @@ from handlers.admin.broadcast import router as admin_broadcast_router
 from handlers.admin.buttons import router as admin_buttons_router
 from handlers.admin.channels import router as admin_channels_router
 from handlers.admin.deposits import router as admin_deposits_router
+from handlers.admin.orders import router as admin_orders_router
 from handlers.admin.panel import router as admin_panel_router
 from handlers.admin.products import router as admin_products_router
 from handlers.admin.users_manage import router as admin_users_manage_router
@@ -115,7 +120,9 @@ from database.schema import ensure_schema
 from database.seed import seed_default_products
 from services.button_store import load_button_overrides
 from services.commands import setup_bot_commands
+from services.deposit_expiry import expiry_worker
 from services.emoji_loader import load_custom_emojis
+from services.userbot import HumocardUserbot
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +130,7 @@ logger = logging.getLogger(__name__)
 # 5. Health check (Render + UptimeRobot)
 # -------------------------------------------------------------
 # Bot nomi — health check javobida qaytariladi.
-HEALTH_BOT_USERNAME = "@nftyutbot"
+HEALTH_BOT_USERNAME = "NFT YUT"
 
 # Health check javobining tanasi.
 HEALTH_PAYLOAD: dict[str, str] = {"status": "ok", "bot": HEALTH_BOT_USERNAME}
@@ -171,6 +178,7 @@ def create_dispatcher() -> Dispatcher:
 
     # --- Routerlar: admin -> subscription -> start/referral -> shop/payout ---
     dp.include_router(admin_panel_router)
+    dp.include_router(admin_orders_router)
     dp.include_router(admin_products_router)
     dp.include_router(admin_channels_router)
     dp.include_router(admin_broadcast_router)
@@ -300,9 +308,21 @@ async def _start_polling() -> asyncio.Task[None]:
     return task
 
 
-async def _shutdown(polling_task: asyncio.Task[None] | None) -> None:
-    """Toza yopish: polling/webhook, DB pool va bot session."""
+async def _shutdown(
+    polling_task: asyncio.Task[None] | None,
+    expiry_task: asyncio.Task[None] | None = None,
+    userbot: HumocardUserbot | None = None,
+) -> None:
+    """Toza yopish: fon vazifalari, polling/webhook, DB pool va bot session."""
     logger.info("Bot yopilmoqda…")
+
+    if expiry_task is not None:
+        expiry_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await expiry_task
+
+    if userbot is not None:
+        await userbot.stop()
 
     if polling_task is not None:
         polling_task.cancel()
@@ -340,6 +360,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
 
     polling_task: asyncio.Task[None] | None = None
+    expiry_task: asyncio.Task[None] | None = None
+    userbot = HumocardUserbot(bot)
     try:
         # 1) Database ulanishini tekshirish (majburiy)
         if not await test_connection():
@@ -363,6 +385,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Xato startupni buzmaydi — komandalar o'rnatilmasa ham bot ishlaydi.
         await setup_bot_commands(bot)
 
+        # 1.5) Fon vazifalari: to'lov muddati va (ixtiyoriy) Telethon userbot.
+        expiry_task = asyncio.create_task(
+            expiry_worker(bot), name="deposit-expiry"
+        )
+        try:
+            await userbot.start()
+        except Exception:  # noqa: BLE001 — userbot startupni to'xtatmasin
+            logger.exception("Userbotni ishga tushirishda xatolik")
+
         # 2) Tanlangan rejimni ishga tushirish
         if settings.BOT_MODE == "polling":
             polling_task = await _start_polling()
@@ -371,15 +402,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         yield
     finally:
-        await _shutdown(polling_task)
+        await _shutdown(polling_task, expiry_task, userbot)
 
 
 # -------------------------------------------------------------
 # FastAPI ilovasi
 # -------------------------------------------------------------
 app = FastAPI(
-    title="nftyutbot",
-    description="Telegram Stars / NFT / Premium boti — webhook server",
+    title="NFT YUT",
+    description="NFT YUT — UZS do'kon, HUMO karta to'lovlari va referal boti",
     lifespan=lifespan,
     # Hujjatlar ommaviy emas (production xavfsizligi uchun o'chirilgan)
     docs_url=None,

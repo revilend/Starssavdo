@@ -1,5 +1,5 @@
 # =============================================================
-# Render Blueprint — @nftyutbot (FastAPI webhook, 24/7)
+# Render Blueprint — NFT YUT (FastAPI webhook, UZS + HUMO karta, 24/7)
 # =============================================================
 # Ishga tushirish:
 #   1) Render Dashboard -> "New" -> "Blueprint"
@@ -41,12 +41,29 @@ services:
       # Telegram secret_token (A-Za-z0-9_- ; masalan: openssl rand -hex 32)
       - key: WEBHOOK_SECRET
         sync: false
+      # To'lov kartasi (HUMO) — admin paneldan ham o'zgartiriladi
+      - key: CARD_NUMBER
+        value: 9860170111243573
+      - key: CARD_HOLDER
+        value: Murodjon Amirov
       # Karta to'lovida 1 Stars narxi (so'm) — unikal summa hisobi uchun
       - key: SOM_PER_STAR
-        value: 250
+        value: 300
+      # Karta to'lovi so'rovi muddati (soniya); 300 = 5 daqiqa
+      - key: DEPOSIT_TTL_SECONDS
+        value: 300
       # Karta to'lovlari jurnali (yopiq guruh/kanal ID); 0 — o'chirilgan
       - key: CARD_LOG_CHAT_ID
         sync: false
+      # Telethon userbot (@humocardbot xabarlari) — ixtiyoriy
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_SESSION_STRING
+        sync: false
+      - key: HUMOCARD_BOT_USERNAME
+        value: humocardbot
       # Ish rejimi: webhook (Render) yoki polling (lokal)
       - key: BOT_MODE
         value: webhook

@@ -48,6 +48,8 @@ router = Router(name="user_payout")
 _TON_RE = re.compile(r"^(0x)?[0-9a-fA-F]{48}$|^(UQ|EQ)[0-9a-fA-F]{48}$")
 # Telegram @username: 5-32 belgi, harf/bosh harf/raqam/underscore bilan boshlanadi
 _USERNAME_RE = re.compile(r"^@?[a-zA-Z][a-zA-Z0-9_]{4,31}$")
+# Bank kartasi: 16 raqam (bo'shliqlar olib tashlangan holda)
+_CARD_RE = re.compile(r"^\d{16}$")
 
 # Bekor qilish tugma matni (UI matni lokal — callback CB_PAYOUT_CANCEL)
 BTN_CANCEL = "❌ Bekor qilish"
@@ -184,9 +186,10 @@ async def on_amount(message: Message, state: FSMContext) -> None:
     await message.answer(
         "🏦 <b>Manzil</b>\n\n"
         "Yechib olish manzilini yuboring:\n"
+        "├ Bank kartasi (16 raqam) yoki\n"
         "├ TON hamyon manzili (48 belgi) yoki\n"
         "└ Telegram @username\n\n"
-        "Masalan: <code>@my_username</code>",
+        "Masalan: <code>9860170111243573</code>",
         parse_mode="HTML",
         reply_markup=_cancel_kb(),
     )
@@ -219,12 +222,16 @@ async def on_destination(message: Message, state: FSMContext) -> None:
             return
     elif _TON_RE.match(raw):
         destination_type = "ton_wallet"
+    elif _CARD_RE.match(raw.replace(" ", "")):
+        destination_type = "card"
+        destination = raw.replace(" ", "")
     elif _USERNAME_RE.match(raw):
         destination_type = "stars_username"
         destination = "@" + raw
     else:
         await message.answer(
-            "⚠️ Noto'g'ri manzil. TON hamyon (48 belgi) yoki @username yuboring.",
+            "⚠️ Noto'g'ri manzil. Karta (16 raqam), TON hamyon (48 belgi) "
+            "yoki @username yuboring.",
             reply_markup=_cancel_kb(),
         )
         return

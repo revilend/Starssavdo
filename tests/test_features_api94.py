@@ -268,7 +268,7 @@ def test_button_registry() -> None:
     print("== 2. button_registry ==")
     registry.clear_overrides()
 
-    ok("default matn", registry.get_text("menu_shop") == "🛍 Do'kon")
+    ok("default matn", registry.get_text("menu_shop") == "🛒 Do'kon")
     ok("rangi primary", registry.get_style("menu_shop") == "primary")
     ok("check success", registry.get_style("check_subscription") == "success")
     ok("admin exit danger", registry.get_style("adm_exit") == "danger")
@@ -301,7 +301,7 @@ def test_button_registry() -> None:
        kb.style == "primary" and kb.icon_custom_emoji_id == "999888")
 
     registry.clear_overrides()
-    ok("override tozalandi", registry.get_text("menu_shop") == "🛍 Do'kon")
+    ok("override tozalandi", registry.get_text("menu_shop") == "🛒 Do'kon")
 
 
 # =============================================================
@@ -331,13 +331,13 @@ def test_button_store() -> None:
 
         registry.clear_overrides()
         ok("kesh tozalandi (DB hali saqlanadi)",
-           registry.get_text("menu_shop") == "🛍 Do'kon")
+           registry.get_text("menu_shop") == "🛒 Do'kon")
 
         await load_button_overrides()
         ok("DB'dan qayta yuklandi", registry.get_text("menu_shop") == "🛍 Bozor")
 
         await reset_button("menu_shop")
-        ok("reset default holatga qaytardi", registry.get_text("menu_shop") == "🛍 Do'kon")
+        ok("reset default holatga qaytardi", registry.get_text("menu_shop") == "🛒 Do'kon")
         rows = await SettingsRepository.get_settings_by_prefix("btn:menu_shop")
         ok("reset DB yozuvlarini o'chirdi", rows == {}, str(rows))
 
@@ -537,10 +537,14 @@ def test_topup_flow() -> None:
         and no_card_state.state is not None,
     )
 
-    # Kartasiz karta usulini tanlash -> ogohlantirish (avtomatik to'lov ishlaydi)
+    # Karta sozlamasi bo'sh bo'lsa ham default HUMO kartasi ishlatiladi
     card_cb = FakeCallback(user_id, "topup_card", FakeBot())
     asyncio.run(topup.topup_card_callback(card_cb, no_card_state))
-    ok("kartasiz ogohlantirish", card_cb.message.answers[0][0] == topup.NO_CARD_TEXT)
+    ok(
+        "default karta bilan miqdor so'raladi",
+        "Qancha Stars olmoqchisiz" in card_cb.message.answers[0][0],
+        card_cb.message.answers[0][0],
+    )
 
 
 # =============================================================
@@ -732,9 +736,10 @@ def test_card_auto_payment() -> None:
 
     text = amount_msg.answers[0][0]
     ok("summa so'mda ko'rsatildi", "so'm" in text and "unikal kod" in text, text)
+    ok("5 daqiqalik ogohlantirish", "daqiqa" in text, text)
     ok("state'da deposit_id", bool(state.data.get("deposit_id")))
     pay_amount = int(state.data.get("pay_amount") or 0)
-    ok("unikal kod 1..99", 1 <= pay_amount - base <= 99, str(pay_amount))
+    ok("unikal kod 40..100", 40 <= pay_amount - base <= 100, str(pay_amount))
 
     deposit_id = int(state.data["deposit_id"])
 
@@ -778,8 +783,8 @@ def test_card_auto_payment() -> None:
     ok("jurnal matni saqlandi", bool(deposit.payment_comment))
     ok("foydalanuvchiga xabar",
        any(chat == auto_user and "+100" in text for chat, text, _ in log_bot.messages))
-    ok("adminlarga hisobot",
-       sum(1 for chat, _, _ in log_bot.messages if chat in settings.ADMIN_IDS) == 2)
+    admin_msgs = [chat for chat, _, _ in log_bot.messages if chat in settings.ADMIN_IDS]
+    ok("adminlarga hisobot", len(admin_msgs) == 2, str(admin_msgs))
 
     # 9.5 takroriy xabar -> balans o'zgarmaydi
     repeat_bot = FakeBot()

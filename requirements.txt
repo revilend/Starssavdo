@@ -43,3 +43,7 @@ uvicorn==0.54.0
 
 # Webhook endpointlarini taqdim etuvchi lightweight HTTP framework
 fastapi==0.159.1
+
+# Telethon userbot: @humocardbot to'lov xabarlarini MTProto orqali o'qish
+# (Bot API boshqa bot xabarlarini guruhlarda ko'ra olmaydi)
+telethon==1.45.0

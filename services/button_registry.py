@@ -71,10 +71,10 @@ class ButtonSpec:
 BUTTONS: dict[str, ButtonSpec] = {
     # --- Asosiy reply menyu ---
     "menu_shop": ButtonSpec(
-        "menu_shop", "🛍 Do'kon", "menu", STYLE_PRIMARY, "🛍", ("duck", "duck_alt")
+        "menu_shop", "🛒 Do'kon", "menu", STYLE_PRIMARY, "🛒", ("duck", "duck_alt")
     ),
     "menu_balance": ButtonSpec(
-        "menu_balance", "⭐️ Balansim", "menu", STYLE_PRIMARY, "⭐️", ("duck", "duck_alt")
+        "menu_balance", "⭐ Balansim", "menu", STYLE_PRIMARY, "⭐", ("duck", "duck_alt")
     ),
     "menu_topup": ButtonSpec(
         "menu_topup", "💳 Balans to'ldirish", "menu", STYLE_SUCCESS, "💳", ("payment",)
@@ -88,7 +88,7 @@ BUTTONS: dict[str, ButtonSpec] = {
         ("duck", "duck_alt"),
     ),
     "menu_gifts": ButtonSpec(
-        "menu_gifts", "🎁 Mayda Giftlar", "menu", STYLE_PRIMARY, "🎁", ("duck", "duck_alt")
+        "menu_gifts", "🐥 Mayda Giftlar", "menu", STYLE_PRIMARY, "🐥", ("duck", "duck_alt")
     ),
     "menu_guide": ButtonSpec(
         "menu_guide", "ℹ️ Qo'llanma", "menu", STYLE_PRIMARY, "ℹ️", ("duck", "duck_alt")
@@ -111,7 +111,7 @@ BUTTONS: dict[str, ButtonSpec] = {
         "cat_nft", "🖼 Telegram NFT", "shop", STYLE_PRIMARY, "🖼", ("duck", "duck_alt")
     ),
     "cat_gift": ButtonSpec(
-        "cat_gift", "🎁 Mayda Giftlar", "shop", STYLE_PRIMARY, "🎁", ("duck", "duck_alt")
+        "cat_gift", "🐥 Mayda Giftlar", "shop", STYLE_PRIMARY, "🐥", ("duck", "duck_alt")
     ),
     "products_back": ButtonSpec(
         "products_back", "◀️ Toifalarga qaytish", "shop", STYLE_PRIMARY

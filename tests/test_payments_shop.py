@@ -289,14 +289,14 @@ def test_shop_menu():
         ok("bitta xabar yuborildi", len(msg.answers) == 1)
         a = msg.answers[0]
         ok("matn: do'kon sarlavhasi",
-           "NFTYUT Rasmiy Do'koniga xush kelibsiz" in a["text"])
+           "NFT YUT rasmiy do'koniga xush kelibsiz" in a["text"])
         ok("matn: 4 bo'lim", all(s in a["text"] for s in (
-            "Rasmiy Telegram Stars to'plamlari",
-            "Tezkor Telegram Premium obunasi",
-            "Telegram eksklyuziv raqamli kolleksiyalari",
-            "ajoyib sovg'alar")))
+            "Telegram Stars to'plamlari",
+            "Telegram Premium (3 / 6 / 12 oy)",
+            "Eksklyuziv raqamli kolleksiyalar",
+            "Telegram rasmiy sovg'alari")))
         ok("matn: to'lov haqida",
-           "rasmiy Telegram Stars yoki botdagi balansingiz" in a["text"])
+           "HUMO karta" in a["text"] and "5 daqiqa" in a["text"])
         cbs = kb_callbacks(a["reply_markup"])
         ok("toifalar klaviaturasi",
            cbs[:4] == ["cat_stars", "cat_premium", "cat_nft", "cat_gift"]
@@ -317,10 +317,10 @@ def test_shop_category():
         a = cb.message.answers
         ok("xabar yuborildi", len(a) == 1)
         ok("nom+narx+tavsif ko'rsatildi",
-           "100 Stars" in a[0]["text"] and "100 XTR" in a[0]["text"]
+           "100 Stars" in a[0]["text"] and "30 000 so'm" in a[0]["text"]
            and "Eng mashhur to&#x27;plam" in a[0]["text"], a[0]["text"])
         cbs = kb_callbacks(a[0]["reply_markup"])
-        ok("buy_prod tugmasi", "buy_prod_1" in cbs, str(cbs))
+        ok("ord_prod tugmasi", "ord_prod_1" in cbs, str(cbs))
 
         # rasmli mahsulot — foto sifatida (caption bilan) yuboriladi
         prods[3] = make_product(3, "gift", "Rasmli gift", "Rasmli sovg'a", 50,
@@ -332,7 +332,7 @@ def test_shop_category():
            a_img.get("photo") == "AgACAgQxAAImgTest"
            and "Rasmli gift" in a_img.get("caption", ""), str(a_img))
         ok("foto captionida ham tugmalar bor",
-           "buy_prod_3" in kb_callbacks(a_img["reply_markup"]))
+           "ord_prod_3" in kb_callbacks(a_img["reply_markup"]))
 
         # bo'sh toifa
         cb2 = FakeCallback(tg_user(555), "cat_nft")

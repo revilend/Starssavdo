@@ -50,27 +50,29 @@ MAIN_MENU_TEXT = "🏠 <b>Bosh menyu</b>\n\nKerakli bo'limni tanlang 👇"
 
 # Balans bo'limi matni
 BALANCE_TEXT = (
-    "⭐️ <b>BALANSIM</b>\n\n"
-    "├ Joriy balans: <b>{balance} ⭐️</b>\n"
-    "├ Jami to'plangan: <b>{earned} ⭐️</b>\n"
+    "⭐ <b>BALANSIM</b>\n\n"
+    "├ Joriy balans: <b>{balance} ⭐</b>\n"
+    "├ So'mda: <b>{balance_uzs} so'm</b> (1 ⭐ = {rate} so'm)\n"
+    "├ Jami to'plangan: <b>{earned} ⭐</b>\n"
     "├ Taklif qilingan do'stlar: <b>{referrals} ta</b>\n"
-    "└ Minimal yechish: <b>{min_withdrawal} ⭐️</b>\n\n"
+    "└ Minimal yechish: <b>{min_withdrawal} ⭐</b>\n\n"
     "Balansni to'ldirishingiz yoki Starslarni yechib olishingiz mumkin 👇"
 )
 
 # Qo'llanma matni
 GUIDE_TEXT = (
-    "ℹ️ <b>QO'LLANMA — @nftyutbot</b>\n\n"
-    "🛍 <b>Do'kon</b> — Telegram Stars, Premium, NFT va Mayda Giftlarni "
-    "rasmiy Stars yoki bot balansi orqali xarid qiling.\n\n"
-    "⭐️ <b>Balansim</b> — joriy balans, to'ldirish, Starslarni yechib olish "
-    "va tranzaksiyalar tarixi.\n\n"
-    "💳 <b>Balans to'ldirish</b> — 2 usul:\n"
-    "   ⚡️ Avtomatik to'lov (Telegram Stars) — darhol qo'shiladi;\n"
-    "   💳 Uzcard / Humo kartaga o'tkazma — chek yoki avtomatik tasdiqlash.\n\n"
-    "👥 <b>Do'stlarni taklif qilish</b> — har bir do'st uchun Stars "
-    "mukofot oling.\n\n"
-    "🎁 <b>Mayda Giftlar</b> — do'stlaringizga sovg'a yuboring.\n\n"
+    "ℹ️ <b>QO'LLANMA — NFT YUT</b>\n\n"
+    "🛒 <b>Do'kon</b> — barcha narxlar SO'MDA: Stars, Premium (3/6/12 oy), "
+    "NFT va Mayda Giftlar. Mahsulotni tanlang va HUMO kartaga to'lang.\n\n"
+    "💳 <b>To'lov</b> — har bir buyurtmaga unikal summa (+40..100 so'm) "
+    "beriladi. Kartaga aynan shu summani o'tkazing: @humocardbot xabari "
+    "avtomatik o'qiladi va buyurtma 5 daqiqa ichida tasdiqlanadi.\n\n"
+    "⭐ <b>Balansim</b> — Stars balansingiz va so'mdagi qiymati, "
+    "yechib olish hamda tranzaksiyalar tarixi.\n\n"
+    "💳 <b>Balans to'ldirish</b> — HUMO karta orqali Stars sotib olish.\n\n"
+    "👥 <b>Do'stlarni taklif qilish</b> — do'stingiz homiy kanallarga a'zo "
+    "bo'lsa, sizga Stars mukofot beriladi.\n\n"
+    "🐥 <b>Mayda Giftlar</b> — Telegram rasmiy sovg'alari avtomatik yuboriladi.\n\n"
     "❓ Savollar bo'lsa administratorga murojaat qiling."
 )
 
@@ -79,7 +81,8 @@ TX_LABELS: dict[str, str] = {
     "deposit": "💳 To'ldirish",
     "referral_reward": "👥 Referal mukofot",
     "bonus": "🎁 Bonus",
-    "purchase": "🛍 Xarid",
+    "purchase": "🛒 Xarid",
+    "order_stars": "⭐ Stars xaridi",
     "withdraw_hold": "💸 Yechib olish",
     "refund": "↩️ Qaytarish",
     "admin_adjust": "⚙️ Admin tuzatishi",
@@ -123,9 +126,12 @@ async def balance_menu(message: Message, state: FSMContext | None = None) -> Non
         )
     )
 
+    rate = await SettingsRepository.get_star_price()
     await message.answer(
         BALANCE_TEXT.format(
             balance=balance,
+            balance_uzs=f"{balance * rate:,}".replace(",", " "),
+            rate=f"{rate:,}".replace(",", " "),
             earned=earned,
             referrals=counts.total,
             min_withdrawal=min_withdrawal,

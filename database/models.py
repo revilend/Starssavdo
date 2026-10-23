@@ -262,8 +262,19 @@ class Product(Base):
     category: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price_uzs: Mapped[int] = mapped_column(
+        BIGINT,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Narx SO'MDA (UZS) — botdagi barcha to'lovlar shu narx bo'yicha",
+    )
     price_xtr: Mapped[int] = mapped_column(
-        BIGINT, nullable=False, comment="Narx Telegram Stars (XTR) da"
+        BIGINT,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Narx Telegram Stars (XTR) da (faqat ichki/eski moslik uchun)",
     )
     payload: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True, comment="Mahsulot detali: {'stars': 100}, {'months': 1} ..."
@@ -309,11 +320,51 @@ class Order(Base):
         index=True,
     )
     payment_method: Mapped[str] = mapped_column(
-        String(32), nullable=False, comment="xtr (Telegram Stars invoice) yoki balance"
+        String(32),
+        nullable=False,
+        comment="card (HUMO/UZS), xtr (Telegram Stars) yoki balance",
     )
-    amount_xtr: Mapped[int] = mapped_column(BIGINT, nullable=False)
+    amount_xtr: Mapped[int] = mapped_column(
+        BIGINT,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Nechta Stars yetkaziladi (stats uchun); pul buyurtmalarida 0",
+    )
+    price_uzs: Mapped[int] = mapped_column(
+        BIGINT,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Mahsulot narxi so'mda (buyurtma paytidagi snapshot)",
+    )
+    pay_amount: Mapped[int | None] = mapped_column(
+        BIGINT,
+        nullable=True,
+        comment=(
+            "Aynan to'lanadigan summa: price_uzs + 40..100 so'm unikal kod. "
+            "Telethon/jurnal to'lovi shu summa bo'yicha topiladi"
+        ),
+    )
+    payment_comment: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="To'lov jurnal xabari (audit uchun)"
+    )
+    expires_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="To'lov muddati (odatda 5 daqiqa)",
+    )
+    payment_message_id: Mapped[int | None] = mapped_column(
+        BIGINT,
+        nullable=True,
+        comment="Foydalanuvchiga yuborilgan to'lov xabari ID'si",
+    )
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="pending", comment="pending/paid/cancelled"
+        String(16),
+        nullable=False,
+        default="pending",
+        comment="pending/paid/cancelled/expired",
     )
     telegram_payment_charge_id: Mapped[str | None] = mapped_column(
         String(255),
@@ -330,11 +381,20 @@ class Order(Base):
     paid_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    fulfilled_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Admin tomonidan yetkazilgani tasdiqlangan vaqt (Premium/NFT)",
+    )
 
     __table_args__ = (
-        CheckConstraint("status IN ('pending', 'paid', 'cancelled')", name="ck_orders_status"),
-        CheckConstraint("amount_xtr > 0", name="ck_orders_amount_positive"),
+        CheckConstraint(
+            "status IN ('pending', 'paid', 'cancelled', 'expired')",
+            name="ck_orders_status",
+        ),
+        CheckConstraint("amount_xtr >= 0", name="ck_orders_amount_positive"),
         Index("ix_orders_user_status", "user_id", "status"),
+        Index("ix_orders_pay_amount", "pay_amount"),
     )
 
 
@@ -441,7 +501,7 @@ class DepositRequest(Base):
         BIGINT,
         nullable=True,
         comment=(
-            "Aynan to'lanadigan summa (so'm): stars*SOM_PER_STAR + 1..99 "
+            "Aynan to'lanadigan summa (so'm): stars*SOM_PER_STAR + 40..100 "
             "unikal kod. Avtomatik to'lov shu summa bo'yicha topiladi"
         ),
     )
@@ -451,10 +511,30 @@ class DepositRequest(Base):
         comment="Avtomatik tasdiqlashda jurnal xabari (audit uchun)",
     )
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="pending", comment="pending/approved/rejected"
+        String(16),
+        nullable=False,
+        default="pending",
+        comment="pending/approved/rejected/expired",
     )
     receipt_file_id: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="To'lov cheki (rasm) file_id"
+    )
+    expires_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment=(
+            "So'rov amal qilish muddati (odatda created_at + 5 daqiqa). "
+            "NULL — muddatsiz (Telegram Stars invoysi kabi)"
+        ),
+    )
+    payment_message_id: Mapped[int | None] = mapped_column(
+        BIGINT,
+        nullable=True,
+        comment=(
+            "Foydalanuvchiga yuborilgan to'lov xabari ID'si — muddat "
+            "tugaganda shu xabar yangilanadi"
+        ),
     )
     admin_id: Mapped[int | None] = mapped_column(
         BIGINT, nullable=True, comment="Qaysi admin ko'rib chiqdi"
@@ -469,7 +549,7 @@ class DepositRequest(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'approved', 'rejected')",
+            "status IN ('pending', 'approved', 'rejected', 'expired')",
             name="ck_deposits_status",
         ),
         CheckConstraint("amount > 0", name="ck_deposits_amount_positive"),

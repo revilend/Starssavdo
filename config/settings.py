@@ -88,12 +88,64 @@ class Settings(BaseSettings):
     )
 
     SOM_PER_STAR: int = Field(
-        default=250,
+        default=300,
         description=(
-            "Karta to'lovida 1 ⭐️ narxi (so'm). To'lov summasi "
-            "`stars * SOM_PER_STAR + 1..99` unikal kod sifatida hisoblanadi"
+            "Karta to'lovida 1 ⭐️ narxi (so'm) — admin panelda ham "
+            "o'zgartiriladi. To'lov summasi `stars * SOM_PER_STAR + 40..100` "
+            "unikal kod sifatida hisoblanadi"
         ),
         ge=1,
+    )
+
+    CARD_NUMBER: str = Field(
+        default="9860170111243573",
+        description="To'lov kartasi raqami (HUMO) — bazadagi sozlama bo'lmasa ishlatiladi",
+    )
+
+    CARD_HOLDER: str = Field(
+        default="Murodjon Amirov",
+        description="To'lov kartasi egasining F.I.SH. — bazadagi sozlama bo'lmasa",
+    )
+
+    DEPOSIT_TTL_SECONDS: int = Field(
+        default=300,
+        description=(
+            "Karta to'lovi so'rovining amal qilish muddati (soniya). "
+            "Standart 300 = 5 daqiqa; muddat o'tsa so'rov 'expired' bo'ladi"
+        ),
+        ge=60,
+        le=86_400,
+    )
+
+    # ------------------ Telethon userbot (@humocardbot) ----------
+    TELEGRAM_API_ID: int = Field(
+        default=0,
+        description=(
+            "Telethon userbot uchun API ID (my.telegram.org). 0 bo'lsa "
+            "userbot ishga tushmaydi — bot guruh/kanal jurnali bilan ishlaydi"
+        ),
+        ge=0,
+    )
+
+    TELEGRAM_API_HASH: str = Field(
+        default="",
+        description="Telethon userbot uchun API HASH (my.telegram.org)",
+    )
+
+    TELEGRAM_SESSION_STRING: str = Field(
+        default="",
+        description=(
+            "Telethon StringSession (shaxsiy profil sessiyasi). Bo'sh bo'lsa "
+            "userbot ishga tushmaydi"
+        ),
+    )
+
+    HUMOCARD_BOT_USERNAME: str = Field(
+        default="humocardbot",
+        description=(
+            "To'lov xabarlarini yuboradigan bot username'i (Telethon shu "
+            "botdan kelgan xabarlarni eshitadi)"
+        ),
     )
 
     CARD_LOG_CHAT_ID: int = Field(
@@ -141,6 +193,16 @@ class Settings(BaseSettings):
         ge=1,
         le=65535,
     )
+
+    # ------------------------ Yordamchi xossalar ----------------
+    @property
+    def USERBOT_ENABLED(self) -> bool:
+        """Telethon userbot uchun barcha majburiy qiymatlar kiritilganmi."""
+        return bool(
+            self.TELEGRAM_API_ID
+            and self.TELEGRAM_API_HASH.strip()
+            and self.TELEGRAM_SESSION_STRING.strip()
+        )
 
     # ------------------------ Validatorlar ----------------------
     @field_validator("ADMIN_IDS", mode="before")

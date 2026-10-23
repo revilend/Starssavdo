@@ -38,6 +38,7 @@ from aiogram.types import CallbackQuery, Message
 
 from config.settings import settings
 from database.queries import PRODUCT_CATEGORIES, ProductRepository, RepositoryError
+from services.card_payment import format_som
 from keyboards.builders import (
     CB_ADM_GIFT_ADD,
     CB_ADM_PROD_ADD_PREFIX,
@@ -68,7 +69,7 @@ router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 
 MAX_TITLE_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 400
-MAX_PRICE_XTR = 1_000_000
+MAX_PRICE_UZS = 100_000_000
 
 PRODUCTS_MENU_TEXT = (
     "🛍 <b>MAHSULOTLARNI BOSHQARISH</b>\n\n"
@@ -96,7 +97,7 @@ PRODUCT_DETAIL_TEXT = (
     "├ ID: <code>{id}</code>\n"
     "├ Toifa: <b>{label}</b>\n"
     "├ Nomi: <b>{title}</b>\n"
-    "├ Narxi: <b>{price} ⭐️</b>\n"
+    "├ Narxi: <b>{price} so'm</b>\n"
     "├ Holati: {status}\n"
     "├ Tavsif: {description}\n"
     "├ Rasm: {image}\n"
@@ -118,8 +119,8 @@ ASK_DESCRIPTION_TEXT = (
 
 ASK_PRICE_TEXT = (
     "💰 <b>3/4 — Narx</b>\n\n"
-    "Narxni <b>Telegram Stars (XTR)</b> da butun son bilan yuboring.\n"
-    "Masalan: <code>100</code>\n\n"
+    "Narxni <b>SO'MDA</b> butun son bilan yuboring.\n"
+    "Masalan: <code>135000</code>\n\n"
     "Bekor qilish: /cancel"
 )
 
@@ -148,8 +149,8 @@ GIFT_TITLE_TEXT = (
 
 GIFT_PRICE_TEXT = (
     "💰 <b>2/5 — Narx</b>\n\n"
-    "Narxni <b>Telegram Stars (XTR)</b> da butun son bilan yuboring.\n"
-    "Masalan: <code>100</code>\n\n"
+    "Narxni <b>SO'MDA</b> butun son bilan yuboring.\n"
+    "Masalan: <code>15000</code>\n\n"
     "Bekor qilish: /cancel"
 )
 
@@ -177,7 +178,7 @@ GIFT_ID_TEXT = (
 
 GIFT_SAVED_TEXT = (
     "✅ <b>Gift bazaga qo'shildi!</b>\n\n"
-    "Nom: <b>{title}</b>\nNarx: <b>{price} ⭐️</b>\n"
+    "Nom: <b>{title}</b>\nNarx: <b>{price} so'm</b>\n"
     "Rasm: {image}\nGift ID: <code>{gift_id}</code>\n\n"
     "Endi u <b>🎁 Mayda Giftlar</b> bo'limida sotiladi."
 )
@@ -192,7 +193,7 @@ ASK_IMAGE_TEXT = (
 FIELD_TITLES: dict[str, str] = {
     "title": "Yangi nom",
     "description": "Yangi tavsif",
-    "price": "Yangi narx (XTR)",
+    "price": "Yangi narx (so'm)",
     "gift": "Yangi Telegram Gift ID",
     "image": "Yangi rasm",
 }
@@ -200,7 +201,7 @@ FIELD_TITLES: dict[str, str] = {
 FIELD_HINTS: dict[str, str] = {
     "title": "Mahsulot nomini yuboring (1–{max_len} belgi).",
     "description": "Tavsifni yuboring yoki <code>-</code> (tozalash uchun).",
-    "price": "Narxni butun son bilan yuboring (Stars). Masalan: <code>100</code>",
+    "price": "Narxni so'mda butun son bilan yuboring. Masalan: <code>135000</code>",
     "gift": "Raqamli <code>gift_id</code> yuboring yoki <code>-</code> (o'chirish uchun).",
     "image": "Rasmni <b>foto sifatida</b> yuboring yoki <code>-</code> (o'chirish uchun).",
 }
@@ -263,7 +264,7 @@ def _detail_text(product: Any) -> str:
         id=product.id,
         label=_label(product.category),
         title=html.escape(str(product.title)),
-        price=product.price_xtr,
+        price=format_som(int(product.price_uzs or product.price_xtr * 300)),
         status="✅ Faol" if product.is_active else "🚫 Nofaol",
         description=html.escape(description) if description else "—",
         image="✅ mavjud" if getattr(product, "image_file_id", None) else "yo'q",
@@ -453,13 +454,13 @@ async def product_description(message: Message, state: FSMContext) -> None:
 async def product_price(message: Message, state: FSMContext) -> None:
     """3-qadam: narxni qabul qiladi; gift uchun gift_id so'raladi."""
     raw = (message.text or "").strip().replace(" ", "").replace(",", "")
-    if not raw.isdigit() or not 1 <= int(raw) <= MAX_PRICE_XTR:
+    if not raw.isdigit() or not 1 <= int(raw) <= MAX_PRICE_UZS:
         await message.answer(
-            INVALID_PRICE.format(max_price=MAX_PRICE_XTR)
+            INVALID_PRICE.format(max_price=MAX_PRICE_UZS)
         )
         return
 
-    await state.update_data(price_xtr=int(raw))
+    await state.update_data(price_uzs=int(raw))
     data = await state.get_data()
 
     if data.get("category") == "gift":
@@ -497,7 +498,7 @@ async def _create_product(message: Message, state: FSMContext) -> None:
         product = await ProductRepository.create_product(
             category=category,
             title=str(data.get("title", "")),
-            price_xtr=int(data.get("price_xtr", 0)),
+            price_uzs=int(data.get("price_uzs", 0)),
             description=data.get("description"),
             payload=payload,
             image_file_id=data.get("image"),
@@ -513,7 +514,7 @@ async def _create_product(message: Message, state: FSMContext) -> None:
     await state.clear()
     logger.info(
         "Admin mahsulot qo'shdi: admin=%s product=%s category=%s price=%s gift=%s",
-        message.from_user.id, product.id, category, product.price_xtr, gift_id,
+        message.from_user.id, product.id, category, product.price_uzs, gift_id,
     )
 
     await message.answer(f"✅ Mahsulot qo'shildi: <b>{html.escape(product.title)}</b>")
@@ -551,13 +552,13 @@ async def gift_title(message: Message, state: FSMContext) -> None:
 
 @router.message(GiftStates.waiting_for_price, F.text)
 async def gift_price(message: Message, state: FSMContext) -> None:
-    """2/5 — narx (XTR)."""
+    """2/5 — narx (so'm)."""
     raw = (message.text or "").strip().replace(" ", "").replace(",", "")
-    if not raw.isdigit() or not 1 <= int(raw) <= MAX_PRICE_XTR:
-        await message.answer(INVALID_PRICE.format(max_price=MAX_PRICE_XTR))
+    if not raw.isdigit() or not 1 <= int(raw) <= MAX_PRICE_UZS:
+        await message.answer(INVALID_PRICE.format(max_price=MAX_PRICE_UZS))
         return
 
-    await state.update_data(price_xtr=int(raw))
+    await state.update_data(price_uzs=int(raw))
     await state.set_state(GiftStates.waiting_for_description)
     await message.answer(GIFT_DESCRIPTION_TEXT)
 
@@ -629,7 +630,7 @@ async def _create_gift(message: Message, state: FSMContext) -> None:
         product = await ProductRepository.create_product(
             category="gift",
             title=str(data.get("title", "")),
-            price_xtr=int(data.get("price_xtr", 0)),
+            price_uzs=int(data.get("price_uzs", 0)),
             description=data.get("description"),
             payload={"gift_id": gift_id} if gift_id else None,
             image_file_id=image,
@@ -646,14 +647,14 @@ async def _create_gift(message: Message, state: FSMContext) -> None:
     await state.clear()
     logger.info(
         "Admin gift qo'shdi: admin=%s product=%s title=%r price=%s img=%s gift=%s",
-        message.from_user.id, product.id, product.title, product.price_xtr,
+        message.from_user.id, product.id, product.title, product.price_uzs,
         bool(image), gift_id,
     )
 
     await message.answer(
         GIFT_SAVED_TEXT.format(
             title=html.escape(product.title),
-            price=product.price_xtr,
+            price=format_som(product.price_uzs),
             image="✅ yuklandi" if image else "yo'q",
             gift_id=gift_id or "kiritilmagan",
         )
@@ -769,10 +770,10 @@ async def product_edit_apply(message: Message, state: FSMContext) -> None:
         fields["description"] = None if raw in ("-", "—", "") else raw
     elif field == "price":
         cleaned = raw.replace(" ", "").replace(",", "")
-        if not cleaned.isdigit() or not 1 <= int(cleaned) <= MAX_PRICE_XTR:
-            await message.answer(INVALID_PRICE.format(max_price=MAX_PRICE_XTR))
+        if not cleaned.isdigit() or not 1 <= int(cleaned) <= MAX_PRICE_UZS:
+            await message.answer(INVALID_PRICE.format(max_price=MAX_PRICE_UZS))
             return
-        fields["price_xtr"] = int(cleaned)
+        fields["price_uzs"] = int(cleaned)
     elif field == "gift":
         payload = dict(product.payload or {})
         if raw in ("-", "—"):
@@ -893,7 +894,7 @@ async def product_delete_confirm(callback: CallbackQuery) -> None:
     text = (
         "🗑 <b>O'CHIRISHNI TASDIQLANG</b>\n\n"
         f"Mahsulot: <b>{html.escape(product.title)}</b> "
-        f"({product.price_xtr}⭐️)\n\n"
+        f"({format_som(int(product.price_uzs or product.price_xtr * 300))} so'm)\n\n"
         "Agar mahsulot bo'yicha buyurtmalar bo'lsa, u butunlay o'chirilmaydi — "
         "faqat nofaol qilinadi."
     )

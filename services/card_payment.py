@@ -5,7 +5,7 @@ Karta to'lovlari jurnalidan summani aniqlash (Bot API 9.4 karta tizimi).
 
 Nega kerak:
  - Foydalanuvchi karta orqali to'ldirishda summa `stars * SOM_PER_STAR` ga
-   **1..99 so'm unikal kod** qo'shib hisoblanadi (masalan 10 000 -> 10 037).
+   **40..100 so'm unikal kod** qo'shib hisoblanadi (masalan 30 000 -> 30 047).
    Shu kod orqali to'lovni aynan qaysi foydalanuvchiga tegishli ekanini
    bilib olamiz.
  - `@CardXabarBot` / `@HUMOcardbot` yuboradigan xabarlarda summa turli

@@ -13,13 +13,13 @@ Oqim:
       -> `bot.send_invoice(currency="XTR")` yuboriladi.
       `successful_payment` kelganda balans **admin aralashuvisiz** qo'shiladi
       (`DepositRepository.confirm_deposit`, idempotent).
- 3. 💳 Karta (`topup_card`): tayyor miqdorlar (50/100/250/500/1000 ⭐️)
+ 3. 💳 Karta (`topup_card`): tayyor miqdorlar (10/50/100/250/500/1000 ⭐️)
     yoki o'z miqdori tanlanadi (10..1 000 000). So'ng
-    `stars * star_price_uzs + 1..99` unikal summa bilan `pending` so'rov
-    yaratiladi va karta raqami ko'rsatiladi
+    `stars * star_price_uzs + 40..100` unikal summa bilan `pending` so'rov
+    yaratiladi (5 daqiqa amal qiladi) va karta raqami ko'rsatiladi
     (`TopupStates.waiting_for_receipt`).
       - `star_price_uzs` — admin panelda sozlanadigan 1 ⭐️ narxi
-        (standart 250 so'm); `.env` dagi `SOM_PER_STAR` — fallback.
+        (standart 300 so'm); `.env` dagi `SOM_PER_STAR` — fallback.
       - Jurnal guruhi/kanaliga aynan shu summa tushsa — balans
         avtomatik qo'shiladi (`handlers/user/card_auto.py`);
       - foydalanuvchi chek (skrinshot) yuborsa — u mavjud so'rovga
@@ -53,8 +53,6 @@ from database.queries import (
     DEPOSIT_APPROVED,
     DEPOSIT_PENDING,
     DEPOSIT_REJECTED,
-    SETTING_CARD_HOLDER,
-    SETTING_CARD_NUMBER,
     DepositRepository,
     DepositStateError,
     RepositoryError,
@@ -153,10 +151,8 @@ def _format_card_number(number: str) -> str:
 
 
 async def _card_details() -> tuple[str, str]:
-    """Admin kiritgan karta raqami va egasini qaytaradi (bo'sh bo'lishi mumkin)."""
-    number = await SettingsRepository.get_setting(SETTING_CARD_NUMBER, "")
-    holder = await SettingsRepository.get_setting(SETTING_CARD_HOLDER, "")
-    return str(number or "").strip(), str(holder or "").strip()
+    """Karta raqami va egasi (baza -> .env default: HUMO kartasi)."""
+    return await SettingsRepository.get_card_details()
 
 
 def _user_id_of(target: Message) -> int:
@@ -205,7 +201,8 @@ async def _begin_card_topup(target: Message, state: FSMContext) -> None:
         "💳 <b>Karta orqali balans to'ldirish</b>\n\n"
         f"Joriy balans: <b>{balance} ⭐️</b>\n"
         f"1 ⭐️ narxi: <b>{format_som(price)} so'm</b>\n"
-        f"Minimal to'ldirish: <b>{MIN_TOPUP_STARS} ⭐️</b>\n\n"
+        f"Minimal to'ldirish: <b>{MIN_TOPUP_STARS} ⭐️</b>\n"
+        f"So'rov muddati: <b>{max(1, settings.DEPOSIT_TTL_SECONDS // 60)} daqiqa</b>\n\n"
         "Qancha Stars olmoqchisiz? Pastdagi tugmalardan tanlang yoki "
         "miqdorni butun son ko'rinishida yozing (masalan: <code>100</code>).\n\n"
         f"Karta: <code>{_format_card_number(number)}</code>"
@@ -562,8 +559,9 @@ async def _start_card_deposit(
 
     holder_line = f"\n👤 Egasi: <b>{html.escape(holder)}</b>" if holder else ""
     code = deposit.pay_amount - amount * price
+    ttl_minutes = max(1, settings.DEPOSIT_TTL_SECONDS // 60)
 
-    await target.answer(
+    sent = await target.answer(
         "💳 <b>To'lov ma'lumotlari</b>\n\n"
         f"├ Miqdor: <b>{amount} ⭐️</b>\n"
         f"├ Karta: <code>{_format_card_number(number)}</code>{holder_line}\n"
@@ -571,10 +569,24 @@ async def _start_card_deposit(
         f"<i>({format_som(amount * price)} so'm + {code} so'm unikal kod)</i>\n\n"
         "Kartaga aynan <b>shu summani</b> o'tkazing — to'lov o'tishi bilan "
         "balansingiz <b>AVTOMATIK</b> to'ldiriladi (admin kutilmaydi)!\n\n"
+        f"⏳ <b>Diqqat:</b> so'rov <b>{ttl_minutes} daqiqa</b> amal qiladi — "
+        "shu vaqt ichida to'lov qilinmasa, so'rov bekor qilinadi va balans "
+        "qo'shilmaydi.\n\n"
         "🧾 To'lov qilgan bo'lsangiz, chekni ham yuborishingiz mumkin.",
         parse_mode="HTML",
         reply_markup=get_topup_receipt_kb(),
     )
+
+    # Xabar ID'si saqlanadi — muddat tugaganda aynan shu xabar yangilanadi.
+    message_id = getattr(sent, "message_id", None)
+    if message_id:
+        try:
+            await DepositRepository.set_payment_message(deposit.id, message_id)
+        except SQLAlchemyError:
+            logger.warning(
+                "To'lov xabari ID'sini saqlab bo'lmadi (deposit=%s)", deposit.id
+            )
+
     logger.info(
         "Karta to'lovi so'rovi yaratildi: user=%s deposit=%s amount=%s pay=%s",
         user_id, deposit.id, amount, deposit.pay_amount,
@@ -612,7 +624,7 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
 async def topup_preset_callback(
     callback: CallbackQuery, state: FSMContext
 ) -> None:
-    """Tayyor miqdor tugmasi (50/100/250/500/1000 ⭐️)."""
+    """Tayyor miqdor tugmasi (10/50/100/250/500/1000 ⭐️)."""
     raw = (callback.data or "")[len(CB_TOPUP_PRESET_PREFIX):].strip()
     if not raw.isdigit():
         await callback.answer("⚠️ Noto'g'ri miqdor", show_alert=True)

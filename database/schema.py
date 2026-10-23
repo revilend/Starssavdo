@@ -74,6 +74,8 @@ SCHEMA_DDL: tuple[str, ...] = (
         payment_comment TEXT,
         status VARCHAR(16) NOT NULL DEFAULT 'pending',
         receipt_file_id TEXT,
+        expires_at TIMESTAMPTZ,
+        payment_message_id BIGINT,
         admin_id BIGINT,
         reject_reason TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -103,7 +105,17 @@ STATUS_CONSTRAINTS: tuple[str, ...] = (
     "ALTER TABLE deposits DROP CONSTRAINT IF EXISTS ck_deposits_status",
     (
         "ALTER TABLE deposits ADD CONSTRAINT ck_deposits_status "
-        "CHECK (status IN ('pending', 'approved', 'rejected'))"
+        "CHECK (status IN ('pending', 'approved', 'rejected', 'expired'))"
+    ),
+    "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_status",
+    (
+        "ALTER TABLE orders ADD CONSTRAINT ck_orders_status "
+        "CHECK (status IN ('pending', 'paid', 'cancelled', 'expired'))"
+    ),
+    "ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_amount_positive",
+    (
+        "ALTER TABLE orders ADD CONSTRAINT ck_orders_amount_positive "
+        "CHECK (amount_xtr >= 0)"
     ),
 )
 

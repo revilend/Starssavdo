@@ -118,10 +118,10 @@ def main() -> None:
     r = inline_rows(kb)
     flat = [b for row in r for b in row]
     ok("3 mahsulot + orqaga", len(flat) == 4)
-    ok("matn formati 'emoji narx XTR'", flat[0].text == "⭐️ 100 Stars — 100 XTR"
-       and flat[2].text == "⭐️ Teddy Bear Gift — 50 XTR", flat[0].text)
-    ok("callback buy_prod_{id}",
-       [b.callback_data for b in flat[:3]] == ["buy_prod_11", "buy_prod_12", "buy_prod_13"])
+    ok("matn formati 'emoji narx so'm'", flat[0].text == "⭐️ 100 Stars — 30 000 so'm"
+       and flat[2].text == "⭐️ Teddy Bear Gift — 15 000 so'm", flat[0].text)
+    ok("callback ord_prod_{id}",
+       [b.callback_data for b in flat[:3]] == ["ord_prod_11", "ord_prod_12", "ord_prod_13"])
     ok("toifalarga qaytish", flat[3].text == "◀️ Toifalarga qaytish"
        and flat[3].callback_data == "shop_categories")
     empty = [b for row in inline_rows(get_products_list_kb([], "nft")) for b in row]
@@ -155,21 +155,23 @@ def main() -> None:
     print("== builders: admin ==")
     kb = get_admin_main_kb()
     flat = [b for row in inline_rows(kb) for b in row]
-    ok("11 tugma (10 bo'lim + chiqish)", len(flat) == 11, str(len(flat)))
+    ok("12 tugma (11 bo'lim + chiqish)", len(flat) == 12, str(len(flat)))
     ok("callbacklar to'liq",
-       [b.callback_data for b in flat[:10]] == ["adm_stats", "adm_broadcast", "adm_channels",
+       [b.callback_data for b in flat[:11]] == ["adm_stats", "adm_broadcast", "adm_channels",
                                                "adm_ref_price", "adm_withdrawals", "adm_balance_edit",
                                                "adm_gift_add", "adm_products", "adm_card",
-                                               "adm_buttons"])
+                                               "adm_buttons", "adm_orders"])
     ok("yangi bo'lim: Giftlarni kiritish", flat[6].text == "🎁 Giftlarni kiritish"
        and flat[6].style == "success")
     ok("yangi bo'lim: Mahsulotlarni boshqarish", flat[7].text == "🛍 Mahsulotlarni boshqarish")
     ok("yangi bo'lim: Karta ma'lumotlari", flat[8].text == "💳 Karta ma'lumotlari"
        and flat[8].style == "success")
     ok("yangi bo'lim: Tugnalar va Emojilar", flat[9].text == "🎛 Tugnalar va Emojilar")
-    ok("chiqish oxirida to'liq qator", flat[10].text == "❌ Chiqish"
-       and flat[10].callback_data == "adm_exit" and flat[10].style == "danger"
-       and len(inline_rows(kb)[5]) == 1)
+    ok("buyurtmalar bo'limi", flat[10].text == "🧾 Buyurtmalar (UZS)"
+       and flat[10].callback_data == "adm_orders")
+    ok("chiqish oxirida to'liq qator", flat[11].text == "❌ Chiqish"
+       and flat[11].callback_data == "adm_exit" and flat[11].style == "danger"
+       and len(inline_rows(kb)[6]) == 1)
 
     class ACh:
         def __init__(self, i, title, active):
@@ -222,8 +224,8 @@ def main() -> None:
 
     product = APr(7, "gift", "Mayda gift", 50)
     lst = [b for row in inline_rows(get_admin_product_list_kb([product, APr(8, "gift", "O'chiq", 10, False)], "gift")) for b in row]
-    ok("ro'yxat: holat + narx", lst[0].text == "✅ Mayda gift — 50⭐️"
-       and lst[1].text == "🚫 O'chiq — 10⭐️")
+    ok("ro'yxat: holat + narx (so'mda)", lst[0].text == "✅ Mayda gift — 15 000 so'm"
+       and lst[1].text == "🚫 O'chiq — 3 000 so'm", lst[0].text)
     ok("ro'yxat callbacki", lst[0].callback_data == "adm_pdet_7")
     ok("ro'yxat: qo'shish + orqaga", lst[2].callback_data == "adm_pnew"
        and lst[3].callback_data == "adm_products")

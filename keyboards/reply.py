@@ -31,9 +31,9 @@ from services.button_registry import BUTTONS, build_reply_button
 MENU_KEYS: tuple[str, ...] = (
     "menu_shop",
     "menu_balance",
-    "menu_topup",
     "menu_refer",
     "menu_gifts",
+    "menu_topup",
     "menu_guide",
 )
 
@@ -57,8 +57,8 @@ def get_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     Asosiy doimiy menyu (ReplyKeyboardMarkup).
 
     Tugmalar joylashuvi:
-        [ 🛍 Do'kon ]                    [ ⭐️ Balansim ]
-        [ 👥 Do'stlarni taklif qilish ]  [ 🎁 Mayda Giftlar ]
+        [ 🛒 Do'kon ]                    [ ⭐ Balansim ]
+        [ 👥 Do'stlarni taklif qilish ]  [ 🐥 Mayda Giftlar ]
         [ 💳 Balans to'ldirish ]
         [ ℹ️ Qo'llanma ]
         (faqat admin uchun)  [ ⚙️ Admin Panel ]

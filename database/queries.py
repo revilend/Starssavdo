@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final, NamedTuple
 
-from sqlalchemy import and_, case, delete, func, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,6 +79,7 @@ TX_PURCHASE: Final[str] = "purchase"            # xarid (-)
 TX_WITHDRAW_HOLD: Final[str] = "withdraw_hold"  # yechib olish uchun muzlatish (-)
 TX_REFUND: Final[str] = "refund"                # rad etilganda qaytarish (+)
 TX_ADMIN_ADJUST: Final[str] = "admin_adjust"    # admin tuzatishi (+/-)
+TX_ORDER_STARS: Final[str] = "order_stars"      # Stars to'plami xaridi (+)
 
 # Referal statuslari
 REFERRAL_PENDING: Final[str] = "pending"
@@ -89,10 +90,12 @@ REFERRAL_REJECTED: Final[str] = "rejected"
 ORDER_PENDING: Final[str] = "pending"
 ORDER_PAID: Final[str] = "paid"
 ORDER_CANCELLED: Final[str] = "cancelled"
+ORDER_EXPIRED: Final[str] = "expired"
 
 # To'lov usullari
-PAYMENT_XTR: Final[str] = "xtr"          # Telegram Stars invoice
-PAYMENT_BALANCE: Final[str] = "balance"  # ichki balansdan
+PAYMENT_CARD: Final[str] = "card"        # HUMO karta (UZS, unikal summa)
+PAYMENT_XTR: Final[str] = "xtr"          # Telegram Stars invoice (eski)
+PAYMENT_BALANCE: Final[str] = "balance"  # ichki balansdan (eski)
 
 # Yechib olish statuslari
 WITHDRAWAL_PENDING: Final[str] = "pending"
@@ -111,12 +114,17 @@ SETTING_CARD_LOG_CHAT: Final[str] = "card_log_chat_id"
 DEPOSIT_PENDING: Final[str] = "pending"
 DEPOSIT_APPROVED: Final[str] = "approved"
 DEPOSIT_REJECTED: Final[str] = "rejected"
+DEPOSIT_EXPIRED: Final[str] = "expired"
 
 # Avtomatik karta to'lovi (jurnal chati orqali)
 # `admin_id=0` — so'rov admin emas, tizim tomonidan tasdiqlangan.
 AUTO_DEPOSIT_ADMIN_ID: Final[int] = 0
-DEPOSIT_CODE_MIN: Final[int] = 1
-DEPOSIT_CODE_MAX: Final[int] = 99
+
+# Kolliziyani oldini oluvchi "kod": asosiy summaga tasodifiy 40..100 so'm
+# qo'shiladi (30 000 -> 30 047). Bir xil miqdorni tanlagan ikki foydalanuvchi
+# har xil summa to'laydi va to'lov aniq moslanadi.
+DEPOSIT_CODE_MIN: Final[int] = 40
+DEPOSIT_CODE_MAX: Final[int] = 100
 DEPOSIT_CODE_ATTEMPTS: Final[int] = 30
 
 # Referal velocity (nakrutka) tekshiruvi
@@ -985,15 +993,20 @@ class ProductRepository:
     async def create_product(
         category: str,
         title: str,
-        price_xtr: int,
+        price_xtr: int = 0,
         description: str | None = None,
         payload: dict[str, Any] | None = None,
         image_file_id: str | None = None,
         sort_order: int = 0,
         is_active: bool = True,
+        price_uzs: int | None = None,
     ) -> Product:
         """
         Yangi mahsulot qo'shadi (admin panel).
+
+        Narx SO'MDA (`price_uzs`) — asosiy. `price_xtr` berilmasa 0;
+        `price_uzs` berilmasa `price_xtr * SOM_PER_STAR` dan hisoblanadi
+        (eski chaqiruvlar bilan moslik uchun).
 
         Raises:
             ValueError: toifa notanish, nom bo'sh yoki narx <= 0.
@@ -1003,15 +1016,21 @@ class ProductRepository:
         title = (title or "").strip()
         if not title:
             raise ValueError("Mahsulot nomi bo'sh bo'lishi mumkin emas")
-        if price_xtr <= 0:
+        if price_uzs is None:
+            price_uzs = int(price_xtr) * app_settings.SOM_PER_STAR
+        price_uzs = int(price_uzs)
+        if price_uzs <= 0:
             raise ValueError("Narx 0 dan katta bo'lishi kerak")
+        if int(price_xtr) < 0:
+            raise ValueError("price_xtr manfiy bo'lishi mumkin emas")
 
         async with get_session() as session:
             product = Product(
                 category=category,
                 title=title,
                 description=(description or "").strip() or None,
-                price_xtr=price_xtr,
+                price_uzs=price_uzs,
+                price_xtr=int(price_xtr),
                 payload=payload,
                 image_file_id=(image_file_id or None),
                 sort_order=sort_order,
@@ -1020,8 +1039,8 @@ class ProductRepository:
             session.add(product)
             await session.flush()
             logger.info(
-                "Mahsulot qo'shildi: id=%s category=%s title=%r price=%s img=%s",
-                product.id, category, title, price_xtr,
+                "Mahsulot qo'shildi: id=%s category=%s title=%r price_uzs=%s img=%s",
+                product.id, category, title, price_uzs,
                 bool(image_file_id),
             )
             return product
@@ -1038,7 +1057,7 @@ class ProductRepository:
             ValueError: noto'g'ri qiymat (narx <= 0, bo'sh nom, ...).
         """
         allowed = {
-            "category", "title", "description", "price_xtr",
+            "category", "title", "description", "price_xtr", "price_uzs",
             "payload", "image_file_id", "is_active", "sort_order",
         }
         unknown = set(fields) - allowed
@@ -1051,7 +1070,9 @@ class ProductRepository:
             fields["title"] = (fields["title"] or "").strip()
             if not fields["title"]:
                 raise ValueError("Mahsulot nomi bo'sh bo'lishi mumkin emas")
-        if "price_xtr" in fields and int(fields["price_xtr"]) <= 0:
+        if "price_xtr" in fields and int(fields["price_xtr"]) < 0:
+            raise ValueError("Narx manfiy bo'lishi mumkin emas")
+        if "price_uzs" in fields and int(fields["price_uzs"]) <= 0:
             raise ValueError("Narx 0 dan katta bo'lishi kerak")
 
         async with get_session() as session:
@@ -1160,6 +1181,305 @@ class OrderRepository:
 
     # ------------------------------------------------------------------
     @staticmethod
+    async def create_card_order(
+        user_id: int,
+        product_id: int,
+        order_data: dict[str, Any] | None = None,
+    ) -> Order:
+        """
+        SO'MDA to'lanadigan (HUMO karta) buyurtma yaratadi.
+
+        Summa = `product.price_uzs + 40..100 so'm` unikal kod. Kod boshqa
+        faol buyurtma yoki balans to'ldirish so'rovi bilan takrorlanmaydi.
+        Buyurtma `DEPOSIT_TTL_SECONDS` (5 daqiqa) muddatga ega.
+
+        Raises:
+            RepositoryError: foydalanuvchi/mahsulot topilmadi, narx 0 yoki
+                bo'sh unikal summa topilmadi.
+        """
+        async with get_session() as session:
+            user = await session.get(User, user_id)
+            if user is None:
+                raise RepositoryError(f"Foydalanuvchi {user_id} topilmadi")
+
+            product = await session.get(Product, product_id, with_for_update=True)
+            if product is None or not product.is_active:
+                raise RepositoryError(
+                    f"Mahsulot {product_id} topilmadi yoki o'chirilgan"
+                )
+            if product.price_uzs <= 0:
+                raise RepositoryError(f"Mahsulot {product_id} narxi belgilanmagan")
+
+            base = int(product.price_uzs)
+            pay_amount: int | None = None
+            for _ in range(DEPOSIT_CODE_ATTEMPTS):
+                code = DEPOSIT_CODE_MIN + secrets.randbelow(
+                    DEPOSIT_CODE_MAX - DEPOSIT_CODE_MIN + 1
+                )
+                candidate = base + code
+                taken_order = await session.scalar(
+                    select(Order.id).where(
+                        Order.status == ORDER_PENDING,
+                        Order.pay_amount == candidate,
+                    )
+                )
+                taken_deposit = await session.scalar(
+                    select(DepositRequest.id).where(
+                        DepositRequest.status == DEPOSIT_PENDING,
+                        DepositRequest.pay_amount == candidate,
+                    )
+                )
+                if taken_order is None and taken_deposit is None:
+                    pay_amount = candidate
+                    break
+
+            if pay_amount is None:
+                raise RepositoryError(
+                    "Unikal to'lov summasini tanlab bo'lmadi — keyinroq urinib ko'ring"
+                )
+
+            payload = product.payload or {}
+            stars = int(payload.get("stars") or 0) if isinstance(payload, dict) else 0
+            data: dict[str, Any] = {
+                "product_title": product.title,
+                "category": product.category,
+                "payload": payload,
+                "price_uzs": base,
+            }
+            data.update(order_data or {})
+
+            order = Order(
+                user_id=user_id,
+                product_id=product_id,
+                payment_method=PAYMENT_CARD,
+                amount_xtr=max(stars, 0),
+                price_uzs=base,
+                pay_amount=pay_amount,
+                status=ORDER_PENDING,
+                expires_at=utcnow()
+                + timedelta(seconds=app_settings.DEPOSIT_TTL_SECONDS),
+                order_data=data,
+            )
+            session.add(order)
+            await session.flush()
+            logger.info(
+                "Karta buyurtmasi yaratildi: id=%s user=%s product=%s "
+                "price=%s pay=%s",
+                order.id, user_id, product_id, base, pay_amount,
+            )
+            return order
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def set_order_payment_message(order_id: int, message_id: int) -> None:
+        """To'lov xabari ID'sini saqlaydi (muddat tugaganda tahrirlash uchun)."""
+        async with get_session() as session:
+            order = await session.get(Order, order_id, with_for_update=True)
+            if order is not None:
+                order.payment_message_id = message_id
+                await session.flush()
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_pending_card_orders(limit: int = 500) -> list[Order]:
+        """Karta to'lovini kutayotgan buyurtmalar (summa moslashtirish uchun)."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Order)
+                .where(
+                    Order.status == ORDER_PENDING,
+                    Order.payment_method == PAYMENT_CARD,
+                    Order.pay_amount.is_not(None),
+                )
+                .order_by(Order.created_at.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def pay_order_by_amount(
+        pay_amount: int, comment: str | None = None
+    ) -> Order | None:
+        """
+        Kelgan to'lov summasini faol buyurtmaga atomik moslaydi.
+
+        Faqat muddati o'tmagan `pending` buyurtma `paid` bo'ladi.
+        Returns: `Order` yoki `None` (mos buyurtma yo'q / allaqachon to'langan).
+        """
+        if pay_amount <= 0:
+            return None
+
+        async with get_session() as session:
+            order = await session.scalar(
+                select(Order)
+                .where(
+                    Order.status == ORDER_PENDING,
+                    Order.payment_method == PAYMENT_CARD,
+                    Order.pay_amount == pay_amount,
+                    or_(
+                        Order.expires_at.is_(None),
+                        Order.expires_at > utcnow(),
+                    ),
+                )
+                .order_by(Order.created_at.asc())
+                .limit(1)
+                .with_for_update()
+            )
+            if order is None:
+                return None
+
+            order.status = ORDER_PAID
+            order.paid_at = utcnow()
+            if comment:
+                order.payment_comment = comment[:1000]
+            await session.flush()
+            logger.info(
+                "Buyurtma to'landi (karta): id=%s user=%s pay=%s",
+                order.id, order.user_id, pay_amount,
+            )
+            return order
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def cancel_order(order_id: int, user_id: int | None = None) -> Order | None:
+        """
+        `pending` buyurtmani bekor qiladi (ega tekshiriladi).
+
+        Returns: yangilangan buyurtma yoki `None` (topilmadi yoki allaqachon
+        to'langan/bekor qilingan).
+        """
+        async with get_session() as session:
+            order = await session.get(Order, order_id, with_for_update=True)
+            if order is None or order.status != ORDER_PENDING:
+                return None
+            if user_id is not None and order.user_id != user_id:
+                return None
+            order.status = ORDER_CANCELLED
+            await session.flush()
+            logger.info("Buyurtma bekor qilindi: id=%s", order_id)
+            return order
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_expired_orders(limit: int = 50) -> list[Order]:
+        """Muddati o'tgan, lekin hali `pending` karta buyurtmalari."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Order)
+                .where(
+                    Order.status == ORDER_PENDING,
+                    Order.payment_method == PAYMENT_CARD,
+                    Order.expires_at.is_not(None),
+                    Order.expires_at <= utcnow(),
+                )
+                .order_by(Order.expires_at.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def expire_order(order_id: int) -> Order | None:
+        """`pending` buyurtmani `expired` qiladi (to'lanmagan)."""
+        async with get_session() as session:
+            order = await session.get(Order, order_id, with_for_update=True)
+            if order is None or order.status != ORDER_PENDING:
+                return None
+            if order.expires_at is None:
+                return None
+            expires_at = order.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at > utcnow():
+                return None
+
+            order.status = ORDER_EXPIRED
+            await session.flush()
+            logger.info("Buyurtma muddati tugadi: id=%s", order.id)
+            return order
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_order(order_id: int) -> Order | None:
+        """Buyurtmani ID bo'yicha oladi."""
+        async with get_session() as session:
+            return await session.get(Order, order_id)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_orders(
+        status: str | None = None, limit: int = 20
+    ) -> list[Order]:
+        """Buyurtmalar ro'yxati (admin panel uchun, oxirgilari birinchi)."""
+        async with get_session() as session:
+            stmt = select(Order)
+            if status is not None:
+                stmt = stmt.where(Order.status == status)
+            result = await session.execute(
+                stmt.order_by(Order.created_at.desc()).limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def mark_order_fulfilled(order_id: int) -> Order:
+        """Premium/NFT buyurtma admin tomonidan yetkazilganini belgilaydi."""
+        async with get_session() as session:
+            order = await session.get(Order, order_id, with_for_update=True)
+            if order is None:
+                raise RepositoryError(f"Buyurtma {order_id} topilmadi")
+            order.fulfilled_at = utcnow()
+            await session.flush()
+            logger.info("Buyurtma yetkazildi: id=%s", order_id)
+            return order
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def count_pending_orders() -> int:
+        """Kutilayotgan (pending) kartali buyurtmalar soni."""
+        async with get_session() as session:
+            return int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Order)
+                    .where(Order.status == ORDER_PENDING)
+                )
+                or 0
+            )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_revenue_stats() -> dict[str, int]:
+        """To'langan buyurtmalar bo'yicha tushum (so'mda va Starsda)."""
+        today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        async with get_session() as session:
+            total_uzs = await session.scalar(
+                select(func.coalesce(func.sum(Order.pay_amount), 0)).where(
+                    Order.status == ORDER_PAID
+                )
+            )
+            today_uzs = await session.scalar(
+                select(func.coalesce(func.sum(Order.pay_amount), 0)).where(
+                    Order.status == ORDER_PAID,
+                    Order.paid_at.is_not(None),
+                    Order.paid_at >= today_start,
+                )
+            )
+            total_stars = await session.scalar(
+                select(func.coalesce(func.sum(Order.amount_xtr), 0)).where(
+                    Order.status == ORDER_PAID,
+                    Order.payment_method == PAYMENT_CARD,
+                )
+            )
+            return {
+                "total_uzs": int(total_uzs or 0),
+                "today_uzs": int(today_uzs or 0),
+                "total_stars": int(total_stars or 0),
+            }
+
+    # ------------------------------------------------------------------
+    @staticmethod
     async def complete_order(order_id: int, telegram_payment_charge_id: str) -> Order:
         """
         Rasmiy Telegram Stars (XTR) to'lovi tasdiqlangach buyurtmani
@@ -1190,17 +1510,6 @@ class OrderRepository:
                 "Buyurtma to'landi: id=%s charge_id=%s", order_id, telegram_payment_charge_id
             )
             return order
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    async def get_order(order_id: int) -> Order | None:
-        """
-        Buyurtmani ID bo'yicha oladi (pre_checkout tekshiruvi uchun).
-
-        Returns: Order | None (topilmagan bo'lsa None).
-        """
-        async with get_session() as session:
-            return await session.get(Order, order_id)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1501,6 +1810,8 @@ class DepositRepository:
         amount: int,
         receipt_file_id: str | None = None,
         pay_amount: int | None = None,
+        expires_at: datetime | None = None,
+        payment_message_id: int | None = None,
     ) -> DepositRequest:
         """
         Yangi `pending` to'ldirish so'rovini yaratadi (balans hali tegmaydi).
@@ -1508,6 +1819,10 @@ class DepositRepository:
         Args:
             pay_amount: aynan to'lanadigan summa (so'm). Avtomatik to'lov
                 shu summa bo'yicha topiladi; `None` bo'lsa faqat chek + admin.
+            expires_at: so'rov amal qilish muddati. `None` — muddatsiz
+                (Telegram Stars invoysi uchun).
+            payment_message_id: foydalanuvchiga yuborilgan to'lov xabari
+                ID'si (muddat tugaganda shu xabar yangilanadi).
 
         Raises:
             ValueError: amount <= 0.
@@ -1527,6 +1842,8 @@ class DepositRepository:
                 status=DEPOSIT_PENDING,
                 receipt_file_id=receipt_file_id,
                 pay_amount=pay_amount,
+                expires_at=expires_at,
+                payment_message_id=payment_message_id,
             )
             session.add(deposit)
             await session.flush()
@@ -1547,8 +1864,10 @@ class DepositRepository:
         """
         Unikal to'lov summasi bilan `pending` so'rov yaratadi.
 
-        Summa = `amount * som_per_star` + 1..99 so'm "kod". Kod boshqa
+        Summa = `amount * som_per_star` + 40..100 so'm "kod". Kod boshqa
         `pending` so'rovlar bilan takrorlanmasligi tekshiriladi (30 urinish).
+        So'rov `DEPOSIT_TTL_SECONDS` (standart 5 daqiqa) muddatga ega —
+        muddat o'tsa `expired` bo'ladi va kechikkan to'lov hisoblanmaydi.
 
         Raises:
             ValueError: amount <= 0 yoki som_per_star <= 0.
@@ -1579,6 +1898,13 @@ class DepositRepository:
                     )
                 )
                 if taken is None:
+                    taken = await session.scalar(
+                        select(Order.id).where(
+                            Order.status == ORDER_PENDING,
+                            Order.pay_amount == candidate,
+                        )
+                    )
+                if taken is None:
                     pay_amount = candidate
                     break
 
@@ -1593,12 +1919,16 @@ class DepositRepository:
                 status=DEPOSIT_PENDING,
                 receipt_file_id=receipt_file_id,
                 pay_amount=pay_amount,
+                expires_at=utcnow() + timedelta(
+                    seconds=app_settings.DEPOSIT_TTL_SECONDS
+                ),
             )
             session.add(deposit)
             await session.flush()
             logger.info(
-                "Deposit (unikal summa) yaratildi: id=%s user=%s amount=%s pay=%s",
-                deposit.id, user_id, amount, pay_amount,
+                "Deposit (unikal summa) yaratildi: id=%s user=%s amount=%s pay=%s "
+                "expires_at=%s",
+                deposit.id, user_id, amount, pay_amount, deposit.expires_at,
             )
             return deposit
 
@@ -1651,6 +1981,11 @@ class DepositRepository:
                 .where(
                     DepositRequest.status == DEPOSIT_PENDING,
                     DepositRequest.pay_amount == pay_amount,
+                    # Muddati o'tgan so'rovga kechikkan to'lov hisoblanmaydi
+                    or_(
+                        DepositRequest.expires_at.is_(None),
+                        DepositRequest.expires_at > utcnow(),
+                    ),
                 )
                 .order_by(DepositRequest.created_at.asc())
                 .limit(1)
@@ -1699,6 +2034,75 @@ class DepositRepository:
 
     # ------------------------------------------------------------------
     @staticmethod
+    async def set_payment_message(deposit_id: int, message_id: int) -> None:
+        """
+        Foydalanuvchiga yuborilgan to'lov xabari ID'sini saqlaydi.
+
+        Muddat tugaganda aynan shu xabar "muddati o'tdi" matniga
+        o'zgartiriladi (yangi xabar yuborilmaydi).
+        """
+        async with get_session() as session:
+            deposit = await session.get(
+                DepositRequest, deposit_id, with_for_update=True
+            )
+            if deposit is not None:
+                deposit.payment_message_id = message_id
+                await session.flush()
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_expired_deposits(limit: int = 50) -> list[DepositRequest]:
+        """Muddati o'tgan, lekin hali `pending` bo'lgan so'rovlar."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(DepositRequest)
+                .where(
+                    DepositRequest.status == DEPOSIT_PENDING,
+                    DepositRequest.expires_at.is_not(None),
+                    DepositRequest.expires_at <= utcnow(),
+                )
+                .order_by(DepositRequest.expires_at.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def expire_deposit(deposit_id: int) -> DepositRequest | None:
+        """
+        `pending` so'rovni `expired` holatiga o'tkazadi (balans tegilmaydi).
+
+        Returns:
+            Yangilangan so'rov yoki `None` — so'rov allaqachon to'langan/rad
+            etilgan yoki hali muddati tugamagan.
+        """
+        async with get_session() as session:
+            deposit = await session.get(
+                DepositRequest, deposit_id, with_for_update=True
+            )
+            if deposit is None or deposit.status != DEPOSIT_PENDING:
+                return None
+            if deposit.expires_at is None:
+                return None
+            expires_at = deposit.expires_at
+            # SQLite naive datetime qaytarishi mumkin — solishtirishdan oldin
+            # timezone'ni tenglashtiramiz.
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at > utcnow():
+                return None
+
+            deposit.status = DEPOSIT_EXPIRED
+            deposit.processed_at = utcnow()
+            await session.flush()
+            logger.info(
+                "Deposit muddati tugadi: id=%s user=%s pay=%s",
+                deposit.id, deposit.user_id, deposit.pay_amount,
+            )
+            return deposit
+
+    # ------------------------------------------------------------------
+    @staticmethod
     async def get_deposit(deposit_id: int) -> DepositRequest | None:
         """Bitta to'ldirish so'rovini ID bo'yicha oladi."""
         async with get_session() as session:
@@ -1710,6 +2114,7 @@ class DepositRepository:
         status: str | None = None, limit: int = 20
     ) -> list[DepositRequest]:
         """So'rovlar ro'yxati (admin panel uchun, oxirgilari birinchi)."""
+        # `expired` so'rovlar ham tarixda ko'rinadi (status bo'yicha filtr).
         async with get_session() as session:
             stmt = select(DepositRequest)
             if status is not None:
@@ -1741,8 +2146,13 @@ class DepositRepository:
         """
         To'ldirishni tasdiqlaydi va balansga ATOMIK qo'shadi.
 
+        Admin qo'lda tasdiqlashi mumkin: `pending` yoki muddati o'tgan
+        (`expired`) so'rov tasdiqlanadi — masalan, foydalanuvchi 5 daqiqadan
+        keyin to'lov qilib, chek yuborsa. Avtomatik tasdiqlash esa faqat
+        muddati o'tmagan `pending` so'rov bilan ishlaydi.
+
         Bitta tranzaksiyada:
-          1. So'rov FOR UPDATE bilan qulflanadi; pending emas ->
+          1. So'rov FOR UPDATE bilan qulflanadi; approved/rejected bo'lsa ->
              `DepositStateError` (ikki marta hisoblanmaydi).
           2. Foydalanuvchi qatori qulflanadi, balans +amount.
           3. `transactions`ga `deposit` audit yozuvi qo'shiladi.
@@ -1756,7 +2166,7 @@ class DepositRepository:
             )
             if deposit is None:
                 raise RepositoryError(f"Deposit {deposit_id} topilmadi")
-            if deposit.status != DEPOSIT_PENDING:
+            if deposit.status not in (DEPOSIT_PENDING, DEPOSIT_EXPIRED):
                 raise DepositStateError(
                     f"So'rov {deposit_id} allaqachon '{deposit.status}' holatida"
                 )
@@ -1802,6 +2212,9 @@ class DepositRepository:
         """
         To'ldirish so'rovini rad etadi (balans o'zgarmaydi).
 
+        `expired` so'rovni ham rad etish mumkin (masalan, chek kelgan,
+        lekin to'lov topilmagan holat).
+
         Raises:
             RepositoryError: so'rov topilmadi.
             DepositStateError: so'rov allaqachon ko'rib chiqilgan.
@@ -1812,7 +2225,7 @@ class DepositRepository:
             )
             if deposit is None:
                 raise RepositoryError(f"Deposit {deposit_id} topilmadi")
-            if deposit.status != DEPOSIT_PENDING:
+            if deposit.status not in (DEPOSIT_PENDING, DEPOSIT_EXPIRED):
                 raise DepositStateError(
                     f"So'rov {deposit_id} allaqachon '{deposit.status}' holatida"
                 )
@@ -1862,11 +2275,29 @@ class SettingsRepository:
 
     # ------------------------------------------------------------------
     @staticmethod
+    async def get_card_details() -> tuple[str, str]:
+        """Karta raqami va egasini qaytaradi (baza -> .env default)."""
+        number = str(
+            await SettingsRepository.get_setting(
+                SETTING_CARD_NUMBER, app_settings.CARD_NUMBER
+            )
+            or ""
+        ).strip()
+        holder = str(
+            await SettingsRepository.get_setting(
+                SETTING_CARD_HOLDER, app_settings.CARD_HOLDER
+            )
+            or ""
+        ).strip()
+        return number, holder
+
+    # ------------------------------------------------------------------
+    @staticmethod
     async def get_star_price() -> int:
         """
         1 ⭐️ ning so'mdagi narxi (`settings.star_price_uzs`).
 
-        Bazada yo'q bo'lsa `.env` dagi `SOM_PER_STAR` (standart 250) ishlatiladi.
+        Bazada yo'q bo'lsa `.env` dagi `SOM_PER_STAR` (standart 300) ishlatiladi.
         """
         price = await SettingsRepository.get_int_setting(
             SETTING_STAR_PRICE, app_settings.SOM_PER_STAR

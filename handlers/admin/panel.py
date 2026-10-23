@@ -27,9 +27,11 @@ from aiogram.types import CallbackQuery, Message
 from config.settings import settings
 from database.queries import (
     ChannelRepository,
+    OrderRepository,
     UserRepository,
     WithdrawalRepository,
 )
+from services.card_payment import format_som
 from keyboards.builders import (
     CB_ADM_BACK,
     CB_ADM_EXIT,
@@ -55,13 +57,17 @@ PANEL_TEXT = (
 
 # Jonli statistika matni (HTML — DefaultBotProperties HTML)
 STATS_TEXT = (
-    "📊 <b>BOTNING JONLI STATISTIKASI</b>\n\n"
+    "📊 <b>NFT YUT — JONLI STATISTIKA</b>\n\n"
     "👥 Jami foydalanuvchilar: {total_users} ta\n"
-    "📅 Bugun qo'shilganlar: {today_users} ta\n"
+    "📅 Bugun qo'shilganlar: {today_users} ta\n\n"
+    "💰 <b>Bugungi tushum: {today_uzs} so'm</b>\n"
+    "💵 Jami tushum: {total_uzs} so'm\n"
+    "⭐️ Sotilgan Stars: {total_stars} ⭐\n"
     "⭐️ Jami tarqatilgan Stars: {total_earned_stars} ⭐️\n"
     "💸 Jami yechib olingan Stars: {total_withdrawn_stars} ⭐️\n"
     "📢 Faol homiy kanallar: {active_channels_count} ta\n"
-    "⏳ Kutilayotgan yechib olish so'rovlari: {pending_withdrawals_count} ta"
+    "⏳ Kutilayotgan yechib olish: {pending_withdrawals_count} ta\n"
+    "🧾 Kutilayotgan buyurtmalar: {pending_orders_count} ta"
 )
 
 EXIT_TEXT = "👋 Admin paneldan chiqildi. Asosiy menyuga qaytdingiz."
@@ -105,14 +111,20 @@ async def admin_stats(callback: CallbackQuery) -> None:
     today_users = await UserRepository.count_new_users_today()
     active_channels = await ChannelRepository.get_active_channels()
     pending_withdrawals = await WithdrawalRepository.count_pending_withdrawals()
+    pending_orders = await OrderRepository.count_pending_orders()
+    revenue = await OrderRepository.get_revenue_stats()
 
     text = STATS_TEXT.format(
         total_users=stats.total_members,
         today_users=today_users,
+        today_uzs=format_som(revenue["today_uzs"]),
+        total_uzs=format_som(revenue["total_uzs"]),
+        total_stars=revenue["total_stars"],
         total_earned_stars=stats.total_distributed_stars,
         total_withdrawn_stars=stats.total_withdrawn_stars,
         active_channels_count=len(active_channels),
         pending_withdrawals_count=pending_withdrawals,
+        pending_orders_count=pending_orders,
     )
 
     await callback.answer()

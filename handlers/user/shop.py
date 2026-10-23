@@ -1,39 +1,33 @@
 """
 handlers/user/shop.py
 =====================
-🛍 Do'kon: toifalar, mahsulotlar va ikki usuldagi to'lov
-(rasmiy Telegram Stars (XTR) yoki bot balansi).
+🛒 Do'kon: toifalar, SO'MDAGI narxlar va HUMO karta to'lovi.
 
-Oqimlar:
- 1. "🛍 Do'kon" — do'kon kirish sahifasi + toifalar klaviaturasi.
- 2. `cat_{category}` — bazadagi faol mahsulotlar (nom, narx, tavsif);
-    toifada `image_file_id` (admin kiritgan rasm) bo'lsa, ro'yxat
-    shu rasmning captioni sifatida yuboriladi (rasm yuborib bo'lmasa
-    — matn qaytariladi).
- 3. `buy_prod_{product_id}` — mahsulot tafsilotlari + usul tanlash:
-      ⭐️ Rasmiy Telegram Stars (XTR) bilan to'lash
-      💳 Botdagi balansimdan yechish
- 4. `pay_xtr_{product_id}` — bazada pending buyurtma + `sendInvoice`
-    (XTR); `pre_checkout_query` 10 soniya ichida tasdiqlanadi;
-    `successful_payment` buyurtmani `paid` qiladi, chek yuboradi va
-    adminga darhol xabarnoma yuboradi.
- 5. `pay_balance_{product_id}` — bot balansi tekshiriladi, yetarli bo'lsa
-    atomik xarid (balans - , transactions audit, buyurtma paid),
-    yetarli emasda alert.
+Asosiy oqim (barcha mahsulotlar uchun):
+ 1. "🛒 Do'kon" — kirish sahifasi + toifalar klaviaturasi.
+ 2. `cat_{category}` — faol mahsulotlar (nom, so'mdagi narx, tavsif).
+ 3. `ord_prod_{product_id}` — buyurtma boshlanadi:
+      premium -> @username so'raladi;
+      nft     -> TON hamyon so'raladi;
+      stars/gift -> darhol karta to'lovi xabari.
+ 4. `OrderRepository.create_card_order` — `price_uzs + 40..100` unikal
+    summa, 5 daqiqalik taymer; foydalanuvchiga karta va aniq summa
+    ko'rsatiladi.
+ 5. `@humocardbot` xabari `services/order_payments.py` tomonidan
+    o'qiladi: buyurtma `paid` bo'ladi va mahsulot turiga qarab yetkaziladi
+    (Stars balansga, Gift sendGift, Premium/NFT adminga).
+ 6. To'lanmasa `services/order_expiry.py` buyurtmani `expired` qiladi va
+    xabarni yangilaydi.
 
-Xavfsizlik:
- - Payload "order:{id}:{user_id}" — pre_checkout'da egasi tekshiriladi
-   (boshqa foydalanuvchining invoysi bilan to'lov rad etiladi).
- - `OrderRepository.complete_order` idempotent (takroriy
-   successful_payment xavfsiz).
- - Balans orqali xarid atomik (`create_balance_order`): race'da
-   InsufficientBalanceError -> foydalanuvchiga alert.
+Eski XTR/balans handlerlari (`pay_xtr_`, `pay_balance_`, `buy_prod_`)
+faqat orqaga moslik uchun qoldirilgan — yangi do'kon ularni ishlatmaydi.
 """
 
 from __future__ import annotations
 
 import html
 import logging
+import re
 from typing import Any
 
 from aiogram import F, Router
@@ -51,18 +45,24 @@ from database.queries import (
     OrderRepository,
     ProductRepository,
     RepositoryError,
+    SettingsRepository,
     UserRepository,
 )
 from keyboards.inline import (
+    CB_BACK_TO_MENU,
+    CB_ORDER_CANCEL_PREFIX,
+    CB_ORDER_PREFIX,
     CB_PAY_BALANCE_PREFIX,
     CB_PAY_XTR_PREFIX,
     CB_SHOP_CATEGORIES,
     CATEGORY_EMOJI,
+    get_order_payment_kb,
     get_products_list_kb,
     get_shop_categories_kb,
     get_topup_needed_kb,
 )
 from services.button_registry import ButtonText
+from services.card_payment import format_som
 from services.gift_delivery import deliver_gift
 from services.payments import (
     ORDER_PAYLOAD_PREFIX,
@@ -70,6 +70,7 @@ from services.payments import (
     parse_order_payload,
     send_stars_invoice,
 )
+from states.order_states import OrderStates
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +78,14 @@ router = Router(name="user_shop")
 
 # Do'kon kirish matni (HTML)
 SHOP_WELCOME_TEXT = (
-    "🛍 <b>NFTYUT Rasmiy Do'koniga xush kelibsiz!</b>\n\n"
-    "Kerakli bo'limni tanlang:\n"
-    "⭐️ <b>Stars</b> — Rasmiy Telegram Stars to'plamlari\n"
-    "💎 <b>Premium</b> — Tezkor Telegram Premium obunasi\n"
-    "🖼 <b>NFT</b> — Telegram eksklyuziv raqamli kolleksiyalari\n"
-    "🎁 <b>Mayda Giftlar</b> — Profilingiz yoki do'stlaringiz uchun "
-    "ajoyib sovg'alar\n\n"
-    "To'lovlarni rasmiy Telegram Stars yoki botdagi balansingiz orqali "
-    "amalga oshirishingiz mumkin!"
+    "🛒 <b>NFT YUT rasmiy do'koniga xush kelibsiz!</b>\n\n"
+    "Barcha narxlar <b>SO'MDA</b>. Kerakli bo'limni tanlang:\n"
+    "⭐️ <b>Stars</b> — Telegram Stars to'plamlari\n"
+    "💎 <b>Premium</b> — Telegram Premium (3 / 6 / 12 oy)\n"
+    "🖼 <b>NFT</b> — Eksklyuziv raqamli kolleksiyalar\n"
+    "🐥 <b>Mayda Giftlar</b> — Telegram rasmiy sovg'alari\n\n"
+    "To'lov: <b>HUMO karta</b> orqali, 5 daqiqa ichida avtomatik "
+    "tasdiqlanadi."
 )
 
 # Toifa sarlavhalari (HTML)
@@ -106,8 +106,8 @@ EMPTY_CATEGORY_TEXT = (
 PRODUCT_DETAIL_TEXT = (
     "{emoji} <b>{title}</b>\n\n"
     "📝 <b>Tavsif:</b> {description}\n\n"
-    "💰 <b>Narx:</b> {price} XTR\n\n"
-    "Xarid usulini tanlang 👇"
+    "💰 <b>Narx:</b> {price} so'm\n\n"
+    "Xarid qilish uchun tugmani bosing 👇"
 )
 
 # XTR chek (spetsifikatsiya matni, HTML)
@@ -264,9 +264,13 @@ async def _category_view(category: str) -> tuple[str, Any, str | None]:
         desc_html = ""
         if product.description:
             desc_html = f"\n   <i>{html.escape(product.description)}</i>"
+        price = int(
+            getattr(product, "price_uzs", 0)
+            or getattr(product, "price_xtr", 0) * 300
+        )
         lines.append(
             f"{index}. <b>{html.escape(product.title)}</b> — "
-            f"<b>{product.price_xtr} XTR</b>{desc_html}"
+            f"<b>{format_som(price)} so'm</b>{desc_html}"
         )
 
     text = (
@@ -353,7 +357,250 @@ async def shop_categories_callback(
 
 
 # =============================================================
-# 3. MAHSULOT — TASHILOTLARI VA USUL TANLASH
+# 3. UZS XARID — HUMO KARTA ORQALI (asosiy oqim)
+# =============================================================
+_USERNAME_RE = re.compile(r"^@?[A-Za-z][A-Za-z0-9_]{4,31}$")
+_TON_RE = re.compile(r"^(0x)?[0-9a-fA-F]{48}$|^(UQ|EQ)[0-9a-fA-F]{48}$")
+
+PREMIUM_USERNAME_TEXT = (
+    "💎 <b>Premium {months} oy</b> — {price} so'm\n\n"
+    "Obunani qaysi Telegram akkauntga ulash kerak?\n"
+    "<b>@username</b> ni yuboring (masalan: <code>@my_username</code>).\n\n"
+    "To'lovdan so'ng admin Fragment orqali obunani ulaydi."
+)
+
+NFT_WALLET_TEXT = (
+    "🖼 <b>{title}</b> — {price} so'm\n\n"
+    "NFT qaysi <b>TON hamyon</b> manziliga yuborilsin?\n"
+    "Manzilni yuboring (48 belgi, EQ/UQ yoki 0x bilan)."
+)
+
+INVALID_USERNAME_TEXT = (
+    "⚠️ Noto'g'ri username. Masalan: <code>@my_username</code> "
+    "(5–32 belgi, harf bilan boshlanadi)."
+)
+
+INVALID_WALLET_TEXT = (
+    "⚠️ Noto'g'ri TON hamyon manzili. 48 belgili manzilni yuboring "
+    "(masalan: <code>UQ...</code>)."
+)
+
+ORDER_PAYMENT_TEXT = (
+    "💳 <b>To'lov ma'lumotlari</b>\n\n"
+    "🛒 Mahsulot: <b>{title}</b>\n"
+    "💰 Narx: <b>{price} so'm</b>\n\n"
+    "├ Karta: <code>{card}</code>\n"
+    "├ Egasi: <b>{holder}</b>\n"
+    "└ <b>To'lanadigan aniq summa:</b> <b>{pay_amount} so'm</b>\n"
+    "<i>({price} so'm + {code} so'm unikal kod)</i>\n\n"
+    "Kartaga <b>aynan shu summani</b> o'tkazing — to'lov <b>avtomatik</b> "
+    "tasdiqlanadi va mahsulot yetkaziladi.\n\n"
+    "⏳ <b>Diqqat:</b> to'lov <b>{minutes} daqiqa</b> ichida qilinishi kerak, "
+    "aks holda buyurtma bekor qilinadi.\n\n"
+    "🧾 Buyurtma: <code>#{order_id}</code>"
+)
+
+ORDER_CANCELLED_TEXT = "❌ Buyurtma bekor qilindi.\n\n🛒 Do'kondan yangi xarid qilishingiz mumkin."
+
+
+def _input_cancel_kb():
+    """Premium/NFT ma'lumot kiritish bosqichi uchun bekor qilish tugmasi."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="❌ Bekor qilish", callback_data="order_flow_cancel", style="danger"
+        )
+    )
+    return builder.as_markup()
+
+
+async def _create_card_checkout(
+    target: Message,
+    state: FSMContext | None,
+    product_id: int,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """UZS buyurtma yaratadi va karta to'lov xabarini yuboradi."""
+    product = await ProductRepository.get_product_by_id(product_id)
+    if product is None or not product.is_active or product.price_uzs <= 0:
+        await target.answer(ALERT_PRODUCT_NOT_FOUND)
+        return
+
+    user_id = target.from_user.id if target.from_user else target.chat.id
+    try:
+        order = await OrderRepository.create_card_order(
+            user_id=user_id, product_id=product.id, order_data=extra or {}
+        )
+    except RepositoryError:
+        logger.exception("UZS buyurtma yaratilmadi: user=%s product=%s", user_id, product.id)
+        await target.answer(ALERT_PURCHASE_FAILED)
+        return
+
+    if state is not None:
+        await state.clear()
+
+    card, holder = await SettingsRepository.get_card_details()
+    code = (order.pay_amount or 0) - order.price_uzs
+    minutes = max(1, settings.DEPOSIT_TTL_SECONDS // 60)
+
+    sent = await target.answer(
+        ORDER_PAYMENT_TEXT.format(
+            title=html.escape(product.title),
+            price=format_som(order.price_uzs),
+            card=" ".join(
+                [card[i:i + 4] for i in range(0, len(card), 4)]
+            ) if card else "—",
+            holder=html.escape(holder),
+            pay_amount=format_som(order.pay_amount or 0),
+            code=code,
+            minutes=minutes,
+            order_id=order.id,
+        ),
+        parse_mode="HTML",
+        reply_markup=get_order_payment_kb(order.id),
+    )
+
+    message_id = getattr(sent, "message_id", None)
+    if message_id:
+        try:
+            await OrderRepository.set_order_payment_message(order.id, message_id)
+        except Exception:  # noqa: BLE001 — xabar ID'si muhim emas
+            logger.warning("Buyurtma xabari ID'si saqlanmadi: %s", order.id)
+
+    logger.info(
+        "UZS buyurtma: user=%s order=%s product=%s price=%s pay=%s",
+        user_id, order.id, product.id, order.price_uzs, order.pay_amount,
+    )
+
+
+@router.callback_query(StateFilter("*"), F.data.startswith(CB_ORDER_PREFIX))
+async def order_product(
+    callback: CallbackQuery, state: FSMContext | None = None
+) -> None:
+    """Mahsulot tanlandi — UZS buyurtma yoki qo'shimcha ma'lumot so'rash."""
+    product_id = _parse_product_id(callback.data or "", CB_ORDER_PREFIX)
+    if product_id is None:
+        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        return
+
+    product = await ProductRepository.get_product_by_id(product_id)
+    if product is None or not product.is_active or product.price_uzs <= 0:
+        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        return
+
+    await callback.answer()
+    if state is not None:
+        await state.clear()
+
+    price = format_som(product.price_uzs)
+    if product.category == "premium":
+        months = int((product.payload or {}).get("months") or 0)
+        if state is None:
+            return
+        await state.set_state(OrderStates.waiting_for_username)
+        await state.update_data(order_product_id=product.id)
+        await callback.message.answer(
+            PREMIUM_USERNAME_TEXT.format(months=months, price=price),
+            parse_mode="HTML",
+            reply_markup=_input_cancel_kb(),
+        )
+        return
+
+    if product.category == "nft":
+        if state is None:
+            return
+        await state.set_state(OrderStates.waiting_for_wallet)
+        await state.update_data(order_product_id=product.id)
+        await callback.message.answer(
+            NFT_WALLET_TEXT.format(
+                title=html.escape(product.title), price=price
+            ),
+            parse_mode="HTML",
+            reply_markup=_input_cancel_kb(),
+        )
+        return
+
+    await _create_card_checkout(callback.message, state, product.id)
+
+
+@router.message(OrderStates.waiting_for_username, F.text)
+async def order_username(message: Message, state: FSMContext) -> None:
+    """Premium uchun @username qabul qilinadi."""
+    data = await state.get_data()
+    product_id = int(data.get("order_product_id") or 0)
+    raw = (message.text or "").strip()
+    if not _USERNAME_RE.match(raw):
+        await message.answer(
+            INVALID_USERNAME_TEXT,
+            parse_mode="HTML",
+            reply_markup=_input_cancel_kb(),
+        )
+        return
+
+    username = raw.lstrip("@")
+    await _create_card_checkout(
+        message, state, product_id, {"target_username": username}
+    )
+
+
+@router.message(OrderStates.waiting_for_wallet, F.text)
+async def order_wallet(message: Message, state: FSMContext) -> None:
+    """NFT uchun TON hamyon manzili qabul qilinadi."""
+    data = await state.get_data()
+    product_id = int(data.get("order_product_id") or 0)
+    wallet = (message.text or "").strip()
+    if not _TON_RE.match(wallet):
+        await message.answer(
+            INVALID_WALLET_TEXT,
+            parse_mode="HTML",
+            reply_markup=_input_cancel_kb(),
+        )
+        return
+
+    await _create_card_checkout(
+        message, state, product_id, {"wallet": wallet}
+    )
+
+
+@router.callback_query(F.data == "order_flow_cancel")
+async def order_flow_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """Premium/NFT ma'lumot kiritishni bekor qiladi."""
+    await state.clear()
+    await callback.answer("Bekor qilindi")
+    try:
+        await callback.message.edit_text(ORDER_CANCELLED_TEXT)
+    except (TelegramBadRequest, AttributeError):
+        await callback.message.answer(ORDER_CANCELLED_TEXT)
+
+
+@router.callback_query(F.data.startswith(CB_ORDER_CANCEL_PREFIX))
+async def order_cancel(callback: CallbackQuery) -> None:
+    """Faol buyurtmani bekor qiladi."""
+    raw = (callback.data or "")[len(CB_ORDER_CANCEL_PREFIX):].strip()
+    if not raw.isdigit():
+        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        return
+
+    order = await OrderRepository.cancel_order(int(raw), callback.from_user.id)
+    if order is None:
+        await callback.answer(
+            "Buyurtma allaqachon yopilgan (to'langan yoki bekor qilingan).",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer("Bekor qilindi")
+    try:
+        await callback.message.edit_text(ORDER_CANCELLED_TEXT)
+    except (TelegramBadRequest, AttributeError):
+        await callback.message.answer(ORDER_CANCELLED_TEXT)
+
+
+# =============================================================
+# 3.1. ESKI OQIM — BOT BALANSI / XTR (moslik uchun saqlanadi)
 # =============================================================
 async def _purchase_with_balance(
     callback: CallbackQuery, product_id: int
@@ -368,6 +615,16 @@ async def _purchase_with_balance(
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        return
+
+    # UZS katalogidagi mahsulotlar (price_xtr=0) faqat HUMO karta orqali
+    # to'lanadi. Eski tugma orqali ularni "bepul" olishning oldini olamiz.
+    if product.price_xtr <= 0:
+        await callback.answer(
+            "💳 Bu mahsulot faqat HUMO karta orqali to'lanadi. "
+            "Do'kondan qayta tanlang.",
+            show_alert=True,
+        )
         return
 
     user_id = callback.from_user.id
@@ -477,6 +734,15 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        return
+
+    # UZS katalogidagi mahsulotlar uchun eski XTR invoysi yaroqsiz
+    if product.price_xtr <= 0:
+        await callback.answer(
+            "💳 Bu mahsulot faqat HUMO karta orqali to'lanadi. "
+            "Do'kondan qayta tanlang.",
+            show_alert=True,
+        )
         return
 
     user_id = callback.from_user.id

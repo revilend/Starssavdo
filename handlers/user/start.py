@@ -50,9 +50,10 @@ REF_PREFIX = "ref_"
 # Salomlashuv matni (HTML)
 WELCOME_TEXT = (
     "👋 <b>Assalomu alaykum, {name}!</b>\n\n"
-    "⭐️ <b>@nftyutbot</b> ga xush kelibsiz! Bu yerda siz Telegram Stars, "
-    "Premium, NFT va mayda sovg'alarni xarid qilishingiz yoki do'stlaringizni "
-    "taklif qilib bepul Stars ishlashingiz mumkin!"
+    "🛒 <b>NFT YUT</b> ga xush kelibsiz! Bu yerda barcha narxlar <b>SO'MDA</b>: "
+    "Telegram Premium, Stars to'plamlari, NFT kolleksiyalar va mayda sovg'alar. "
+    "To'lov HUMO karta orqali avtomatik tasdiqlanadi.\n\n"
+    "👥 Do'stlaringizni taklif qilib bepul Stars ishlashingiz ham mumkin!"
 )
 
 

@@ -70,7 +70,7 @@ class ProductStates(StatesGroup):
 
     waiting_for_title = State()        # Mahsulot nomi
     waiting_for_description = State()  # Tavsif ("-" — o'tkazib yuborish)
-    waiting_for_price = State()        # Narx (XTR)
+    waiting_for_price = State()        # Narx (so'm)
     waiting_for_gift_id = State()      # Telegram gift_id (gift toifasi uchun)
     waiting_for_edit_value = State()   # Tahrirlanayotgan maydonning yangi qiymati
 
@@ -79,7 +79,7 @@ class GiftStates(StatesGroup):
     """'🎁 Giftlarni kiritish' — alohida gift kiritish oqimi (admin)."""
 
     waiting_for_title = State()        # 1. Gift nomi
-    waiting_for_price = State()        # 2. Narx (XTR)
+    waiting_for_price = State()        # 2. Narx (so'm)
     waiting_for_description = State()  # 3. Ta'rif ("-" — o'tkazib yuborish)
     waiting_for_image = State()        # 4. Rasm ("-" — o'tkazib yuborish)
     waiting_for_gift_id = State()      # 5. Telegram gift_id ("-" — keyinroq)

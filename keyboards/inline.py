@@ -31,6 +31,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from services.button_registry import build_inline_button
+from services.card_payment import format_som
 
 # -------------------------------------------------------------
 # Callback data konstantalari
@@ -49,8 +50,12 @@ CB_TOPUP_RECEIPT = "topup_receipt"
 CB_TOPUP_PRESET_PREFIX = "tamt_"
 
 # Tez tanlash uchun tayyor Stars to'plamlari (karta usulida)
-TOPUP_PRESETS: tuple[int, ...] = (50, 100, 250, 500, 1000)
+TOPUP_PRESETS: tuple[int, ...] = (10, 50, 100, 250, 500, 1000)
 CB_TX_HISTORY = "tx_history"
+
+# Yangi UZS xarid oqimi: "ord_prod_{product_id}" — karta orqali to'lov
+CB_ORDER_PREFIX = "ord_prod_"
+CB_ORDER_CANCEL_PREFIX = "order_cancel_"
 
 # Xarid callback prefikslari
 CB_BUY_PRODUCT_PREFIX = "buy_prod_"
@@ -65,7 +70,7 @@ CATEGORY_EMOJI: dict[str, str] = {
     "stars": "⭐️",
     "premium": "💎",
     "nft": "🖼",
-    "gift": "🎁",
+    "gift": "🐥",
 }
 
 
@@ -139,8 +144,8 @@ def get_products_list_kb(
     Tanlangan toifa bo'yicha mahsulotlar ro'yxati.
 
     Har bir mahsulot:
-        text          = "{emoji} {title} — {narx} XTR"
-        callback_data = "buy_prod_{product_id}"
+        text          = "{emoji} {title} — {narx} so'm"
+        callback_data = "ord_prod_{product_id}"
 
     Pastda [ ◀️ Toifalarga qaytish ].
     Mahsulot bo'lmasa — faqat qaytish tugmasi.
@@ -149,9 +154,12 @@ def get_products_list_kb(
     emoji = CATEGORY_EMOJI.get(category, "🛍")
 
     for product in products:
+        price = int(getattr(product, "price_uzs", 0) or 0)
+        if price <= 0:  # eski (faqat XTR) mahsulot uchun moslik
+            price = int(getattr(product, "price_xtr", 0) or 0) * 300
         builder.button(
-            text=f"{emoji} {product.title} — {product.price_xtr} XTR",
-            callback_data=f"buy_prod_{product.id}",
+            text=f"{emoji} {product.title} — {format_som(price)} so'm",
+            callback_data=f"{CB_ORDER_PREFIX}{product.id}",
             style="primary",
         )
 
@@ -288,8 +296,8 @@ def get_topup_presets_kb() -> InlineKeyboardMarkup:
     """
     Karta usuli uchun tayyor miqdorlar:
 
-        [ 50 ⭐️ ] [ 100 ⭐️ ] [ 250 ⭐️ ]
-        [ 500 ⭐️ ] [ 1000 ⭐️ ]
+        [ 10 ⭐️ ] [ 50 ⭐️ ] [ 100 ⭐️ ]
+        [ 250 ⭐️ ] [ 500 ⭐️ ] [ 1000 ⭐️ ]
         [ ✍️ Boshqa miqdor ]   (topup_manual)
         [ ❌ Yopish ]          (topup_cancel)
     """
@@ -300,7 +308,7 @@ def get_topup_presets_kb() -> InlineKeyboardMarkup:
             callback_data=f"{CB_TOPUP_PRESET_PREFIX}{amount}",
             style="primary",
         )
-    builder.adjust(3, 2, 1, 1)
+    builder.adjust(3, 3, 1, 1)
     builder.row(
         InlineKeyboardButton(
             text="✍️ Boshqa miqdor",
@@ -369,6 +377,38 @@ def get_topup_methods_kb() -> InlineKeyboardMarkup:
 # =============================================================
 # 7. ADMIN — TO'LDIRISHNI TASDIQLASH
 # =============================================================
+def get_order_payment_kb(order_id: int) -> InlineKeyboardMarkup:
+    """UZS buyurtma to'lov xabari: bekor qilish + do'konga qaytish."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="❌ Bekor qilish",
+            callback_data=f"{CB_ORDER_CANCEL_PREFIX}{order_id}",
+            style="danger",
+        )
+    )
+    builder.row(
+        build_inline_button("shop_back", callback_data=CB_SHOP_CATEGORIES)
+    )
+    return builder.as_markup()
+
+
+def get_order_expired_kb() -> InlineKeyboardMarkup:
+    """Muddati o'tgan buyurtma: do'konga qaytish."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        build_inline_button("shop_back", callback_data=CB_SHOP_CATEGORIES)
+    )
+    return builder.as_markup()
+
+
+def get_topup_expired_kb() -> InlineKeyboardMarkup:
+    """Muddati o'tgan to'lov xabari uchun [🔄 Qaytadan to'ldirish] tugmasi."""
+    builder = InlineKeyboardBuilder()
+    builder.row(build_inline_button("topup", callback_data=CB_TOPUP_START))
+    return builder.as_markup()
+
+
 def get_deposit_decision_kb(deposit_id: int) -> InlineKeyboardMarkup:
     """
     Admin uchun karta chekini tasdiqlash/rad etish:

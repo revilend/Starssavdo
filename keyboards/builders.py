@@ -35,6 +35,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from services.button_registry import build_inline_button
+from services.card_payment import format_som
 
 # -------------------------------------------------------------
 # Callback data konstantalari
@@ -49,6 +50,7 @@ CB_ADM_PRODUCTS = "adm_products"
 CB_ADM_GIFT_ADD = "adm_gift_add"
 CB_ADM_CARD = "adm_card"
 CB_ADM_BUTTONS = "adm_buttons"
+CB_ADM_ORDERS = "adm_orders"
 CB_ADM_EXIT = "adm_exit"
 CB_ADM_CH_ADD = "adm_chadd"
 CB_ADM_BACK = "adm_back"
@@ -112,6 +114,13 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
     builder.row(
         build_inline_button("adm_card", callback_data=CB_ADM_CARD),
         build_inline_button("adm_buttons", callback_data=CB_ADM_BUTTONS),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🧾 Buyurtmalar (UZS)",
+            callback_data=CB_ADM_ORDERS,
+            style="success",
+        )
     )
     builder.row(build_inline_button("adm_exit", callback_data=CB_ADM_EXIT))
     return builder.as_markup()
@@ -264,9 +273,12 @@ def get_admin_product_list_kb(
     builder = InlineKeyboardBuilder()
     for product in products:
         status = "✅" if product.is_active else "🚫"
+        price = int(getattr(product, "price_uzs", 0) or 0)
+        if price <= 0:
+            price = int(getattr(product, "price_xtr", 0) or 0) * 300
         builder.row(
             InlineKeyboardButton(
-                text=f"{status} {product.title} — {product.price_xtr}⭐️",
+                text=f"{status} {product.title} — {format_som(price)} so'm",
                 callback_data=f"{CB_ADM_PROD_DETAIL_PREFIX}{product.id}",
                 style="primary" if product.is_active else "danger",
             )

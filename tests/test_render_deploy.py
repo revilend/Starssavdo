@@ -154,6 +154,10 @@ def _patch_runtime(
     async def fake_session_close() -> None:
         calls["session_closed"] += 1
 
+    async def fake_expiry_worker(*args: Any, **kwargs: Any) -> None:
+        # Fon vazifasi: test davomida DB'ga murojaat qilmaydi
+        await asyncio.Event().wait()
+
     def fake_start_polling(*args: Any, **kwargs: Any) -> Any:
         # `dp.start_polling(...)` create_task ichida chaqiriladi, shuning uchun
         # argumentlar korutin ishga tushishini kutmasdan yozib olinadi.
@@ -188,6 +192,7 @@ def _patch_runtime(
     )
     monkeypatch.setattr(app_main.bot.session, "close", fake_session_close)
     monkeypatch.setattr(app_main.dp, "start_polling", fake_start_polling)
+    monkeypatch.setattr(app_main, "expiry_worker", fake_expiry_worker)
     return calls
 
 
@@ -204,8 +209,8 @@ def _run_lifespan() -> None:
 # ------------------------------------------------------------------
 def test_health_payload() -> None:
     """Health javobi Render/UptimeRobot uchun to'g'ri tuzilgan."""
-    assert app_main.HEALTH_PAYLOAD == {"status": "ok", "bot": "@nftyutbot"}
-    assert app_main.HEALTH_BOT_USERNAME == "@nftyutbot"
+    assert app_main.HEALTH_PAYLOAD == {"status": "ok", "bot": "NFT YUT"}
+    assert app_main.HEALTH_BOT_USERNAME == "NFT YUT"
 
 
 def test_health_endpoints_return_200() -> None:
@@ -216,7 +221,7 @@ def test_health_endpoints_return_200() -> None:
 
     status, payload = _request("GET", "/health")
     assert status == 200, f"/health -> {status}"
-    assert payload == {"status": "ok", "bot": "@nftyutbot"}, f"/health -> {payload}"
+    assert payload == {"status": "ok", "bot": "NFT YUT"}, f"/health -> {payload}"
 
 
 # ------------------------------------------------------------------
