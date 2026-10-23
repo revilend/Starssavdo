@@ -13,10 +13,14 @@ Oqim:
       -> `bot.send_invoice(currency="XTR")` yuboriladi.
       `successful_payment` kelganda balans **admin aralashuvisiz** qo'shiladi
       (`DepositRepository.confirm_deposit`, idempotent).
- 3. 💳 Karta (`topup_card`): miqdor so'raladi (10..1 000 000), so'ng
-    `stars * SOM_PER_STAR + 1..99` unikal summa va karta raqami ko'rsatiladi
+ 3. 💳 Karta (`topup_card`): tayyor miqdorlar (50/100/250/500/1000 ⭐️)
+    yoki o'z miqdori tanlanadi (10..1 000 000). So'ng
+    `stars * star_price_uzs + 1..99` unikal summa bilan `pending` so'rov
+    yaratiladi va karta raqami ko'rsatiladi
     (`TopupStates.waiting_for_receipt`).
-      - `CARD_LOG_CHAT_ID` jurnaliga aynan shu summa tushsa — balans
+      - `star_price_uzs` — admin panelda sozlanadigan 1 ⭐️ narxi
+        (standart 250 so'm); `.env` dagi `SOM_PER_STAR` — fallback.
+      - Jurnal guruhi/kanaliga aynan shu summa tushsa — balans
         avtomatik qo'shiladi (`handlers/user/card_auto.py`);
       - foydalanuvchi chek (skrinshot) yuborsa — u mavjud so'rovga
         biriktiriladi va barcha adminlarga [✅ Tasdiqlash] / [❌ Rad etish]
@@ -61,10 +65,15 @@ from keyboards.inline import (
     CB_TOPUP_AUTO,
     CB_TOPUP_CANCEL,
     CB_TOPUP_CARD,
+    CB_TOPUP_MANUAL,
+    CB_TOPUP_PRESET_PREFIX,
+    CB_TOPUP_RECEIPT,
     CB_TOPUP_START,
     get_deposit_decision_kb,
     get_topup_cancel_kb,
     get_topup_methods_kb,
+    get_topup_presets_kb,
+    get_topup_receipt_kb,
 )
 from services.button_registry import ButtonText
 from services.card_payment import format_som
@@ -179,7 +188,7 @@ async def _begin_topup(target: Message, state: FSMContext) -> None:
 
 
 async def _begin_card_topup(target: Message, state: FSMContext) -> None:
-    """Karta orqali to'ldirish: miqdor so'raydi."""
+    """Karta orqali to'ldirish: tayyor miqdorlar yoki o'z miqdorini tanlash."""
     number, holder = await _card_details()
     if not number:
         await state.clear()
@@ -189,18 +198,20 @@ async def _begin_card_topup(target: Message, state: FSMContext) -> None:
     user_id = _user_id_of(target)
     user = await UserRepository.get_user(user_id)
     balance = user.stars_balance if user else 0
+    price = await SettingsRepository.get_star_price()
 
     await state.set_state(TopupStates.waiting_for_amount)
     await target.answer(
         "💳 <b>Karta orqali balans to'ldirish</b>\n\n"
         f"Joriy balans: <b>{balance} ⭐️</b>\n"
+        f"1 ⭐️ narxi: <b>{format_som(price)} so'm</b>\n"
         f"Minimal to'ldirish: <b>{MIN_TOPUP_STARS} ⭐️</b>\n\n"
-        "To'ldirmoqchi bo'lgan Stars miqdorini butun son ko'rinishida "
-        "yuboring (masalan: <code>100</code>).\n\n"
+        "Qancha Stars olmoqchisiz? Pastdagi tugmalardan tanlang yoki "
+        "miqdorni butun son ko'rinishida yozing (masalan: <code>100</code>).\n\n"
         f"Karta: <code>{_format_card_number(number)}</code>"
         + (f"\nEgasi: <b>{html.escape(holder)}</b>" if holder else ""),
         parse_mode="HTML",
-        reply_markup=get_topup_cancel_kb(),
+        reply_markup=get_topup_presets_kb(),
     )
     logger.info("Karta topup boshlandi: user=%s", user_id)
 
@@ -482,91 +493,156 @@ async def topup_successful_payment(message: Message) -> None:
 # =============================================================
 # 5. KARTA — MIQDOR
 # =============================================================
+def _amount_error(amount: int) -> str | None:
+    """Miqdor chegaralarini tekshiradi (xato matni yoki None)."""
+    if amount < MIN_TOPUP_STARS:
+        return f"⚠️ Minimal to'ldirish — <b>{MIN_TOPUP_STARS} ⭐️</b>."
+    if amount > MAX_TOPUP_STARS:
+        return f"⚠️ Maksimal to'ldirish — <b>{MAX_TOPUP_STARS} ⭐️</b>."
+    return None
+
+
+async def _start_card_deposit(
+    target: Message, state: FSMContext, amount: int
+) -> None:
+    """
+    Karta to'lovi uchun unikal summa bilan `pending` so'rov yaratadi va
+    karta rekvizitlarini ko'rsatadi.
+
+    So'rov to'lovdan OLDIN bazada bo'lishi shart — jurnal chatidan kelgan
+    summa shu so'rovga moslanadi va balans avtomatik qo'shiladi.
+    """
+    number, holder = await _card_details()
+    if not number:
+        await state.clear()
+        await target.answer(NO_CARD_TEXT, parse_mode="HTML")
+        return
+
+    price = await SettingsRepository.get_star_price()
+    user_id = _user_id_of(target)
+
+    try:
+        deposit = await DepositRepository.create_deposit_with_unique_sum(
+            user_id=user_id,
+            amount=amount,
+            som_per_star=price,
+        )
+    except (RepositoryError, ValueError) as exc:
+        logger.warning("Unikal summa yaratilmadi (user=%s): %s", user_id, exc)
+        await target.answer(
+            "⚠️ So'rovni yaratib bo'lmadi. Iltimos, /start bosib qaytadan "
+            "urinib ko'ring.",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+    except SQLAlchemyError:
+        logger.exception("Unikal summa DB xatosi (user=%s)", user_id)
+        await target.answer(
+            "⚠️ Bazada xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+
+    await state.update_data(
+        amount=amount,
+        deposit_id=deposit.id,
+        pay_amount=deposit.pay_amount,
+        som_per_star=price,
+    )
+    await state.set_state(TopupStates.waiting_for_receipt)
+
+    holder_line = f"\n👤 Egasi: <b>{html.escape(holder)}</b>" if holder else ""
+    code = deposit.pay_amount - amount * price
+
+    await target.answer(
+        "💳 <b>To'lov ma'lumotlari</b>\n\n"
+        f"├ Miqdor: <b>{amount} ⭐️</b>\n"
+        f"├ Karta: <code>{_format_card_number(number)}</code>{holder_line}\n"
+        f"└ To'lov summasi: <b>{format_som(deposit.pay_amount)} so'm</b>\n"
+        f"<i>({format_som(amount * price)} so'm + {code} so'm unikal kod)</i>\n\n"
+        "Kartaga aynan <b>shu summani</b> o'tkazing — to'lov o'tishi bilan "
+        "balansingiz <b>AVTOMATIK</b> to'ldiriladi (admin kutilmaydi)!\n\n"
+        "🧾 To'lov qilgan bo'lsangiz, chekni ham yuborishingiz mumkin.",
+        parse_mode="HTML",
+        reply_markup=get_topup_receipt_kb(),
+    )
+    logger.info(
+        "Karta to'lovi so'rovi yaratildi: user=%s deposit=%s amount=%s pay=%s",
+        user_id, deposit.id, amount, deposit.pay_amount,
+    )
+
+
 @router.message(TopupStates.waiting_for_amount, F.text)
 async def topup_amount(message: Message, state: FSMContext) -> None:
-    """Miqdorni tekshiradi va karta rekvizitlari bilan chek so'raydi."""
+    """Qo'lda kiritilgan Stars miqdorini qabul qiladi."""
     amount = _parse_amount(message.text or "")
     if amount is None:
         await message.answer(
             "⚠️ Iltimos, miqdorni faqat butun son ko'rinishida yuboring "
             "(masalan: <code>100</code>).",
             parse_mode="HTML",
-            reply_markup=get_topup_cancel_kb(),
+            reply_markup=get_topup_presets_kb(),
         )
         return
 
-    if amount < MIN_TOPUP_STARS:
+    error = _amount_error(amount)
+    if error:
         await message.answer(
-            f"⚠️ Minimal to'ldirish — <b>{MIN_TOPUP_STARS} ⭐️</b>.",
+            error,
             parse_mode="HTML",
-            reply_markup=get_topup_cancel_kb(),
-        )
-        return
-    if amount > MAX_TOPUP_STARS:
-        await message.answer(
-            f"⚠️ Maksimal to'ldirish — <b>{MAX_TOPUP_STARS} ⭐️</b>.",
-            parse_mode="HTML",
-            reply_markup=get_topup_cancel_kb(),
+            reply_markup=get_topup_presets_kb(),
         )
         return
 
-    number, holder = await _card_details()
-    if not number:
-        await state.clear()
-        await message.answer(NO_CARD_TEXT, parse_mode="HTML")
+    await _start_card_deposit(message, state, amount)
+
+
+@router.callback_query(
+    StateFilter("*"), F.data.startswith(CB_TOPUP_PRESET_PREFIX)
+)
+async def topup_preset_callback(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """Tayyor miqdor tugmasi (50/100/250/500/1000 ⭐️)."""
+    raw = (callback.data or "")[len(CB_TOPUP_PRESET_PREFIX):].strip()
+    if not raw.isdigit():
+        await callback.answer("⚠️ Noto'g'ri miqdor", show_alert=True)
         return
 
-    # Unikal summa bilan so'rov yaratamiz: `stars * SOM_PER_STAR + 1..99`.
-    # To'lov avtomatik aniqlanishi uchun so'rov to'lovdan OLDIN bazada bo'lishi
-    # shart. Jurnal chat sozlanmagan bo'lsa (CARD_LOG_CHAT_ID=0) avtomatik
-    # tasdiqlash o'chirilgan — so'rov faqat chek kelganda yaratiladi.
-    user_id = message.from_user.id if message.from_user else message.chat.id
-    deposit = None
-    if settings.CARD_LOG_CHAT_ID:
-        try:
-            deposit = await DepositRepository.create_deposit_with_unique_sum(
-                user_id=user_id,
-                amount=amount,
-                som_per_star=settings.SOM_PER_STAR,
-            )
-        except (RepositoryError, ValueError) as exc:
-            logger.warning("Unikal summa yaratilmadi (user=%s): %s", user_id, exc)
-        except SQLAlchemyError:
-            logger.exception("Unikal summa DB xatosi (user=%s)", user_id)
+    amount = int(raw)
+    error = _amount_error(amount)
+    if error:
+        await callback.answer(error, show_alert=True)
+        return
 
-    await state.update_data(
-        amount=amount,
-        deposit_id=deposit.id if deposit else None,
-        pay_amount=deposit.pay_amount if deposit else None,
+    await callback.answer()
+    await _start_card_deposit(callback.message, state, amount)
+
+
+@router.callback_query(F.data == CB_TOPUP_MANUAL)
+async def topup_manual_callback(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """✍️ Boshqa miqdor — qo'lda kiritish."""
+    await callback.answer()
+    await state.set_state(TopupStates.waiting_for_amount)
+    await callback.message.answer(
+        "✍️ To'ldirmoqchi bo'lgan <b>Stars miqdorini</b> butun son "
+        "ko'rinishida yuboring (masalan: <code>100</code>).",
+        parse_mode="HTML",
+        reply_markup=get_topup_cancel_kb(),
     )
+
+
+@router.callback_query(F.data == CB_TOPUP_RECEIPT)
+async def topup_receipt_prompt(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """🧾 To'lov qildim / Chek yuborish — chek rasmini so'raydi."""
+    await callback.answer()
     await state.set_state(TopupStates.waiting_for_receipt)
-
-    holder_line = f"\n👤 Egasi: <b>{html.escape(holder)}</b>" if holder else ""
-
-    sum_block = ""
-    auto_line = "⚠️ Chek yuborilmaguncha balans qo'shilmaydi."
-    if deposit and deposit.pay_amount:
-        code = deposit.pay_amount - amount * settings.SOM_PER_STAR
-        sum_block = (
-            "\n💵 To'lov summasi: "
-            f"<b>{format_som(deposit.pay_amount)} so'm</b>\n"
-            f"<i>({amount} ⭐️ = {format_som(amount * settings.SOM_PER_STAR)} "
-            f"so'm + {code} so'm unikal kod)</i>\n"
-        )
-        auto_line = (
-            "✅ Aynan yuqoridagi summani o'tkazing — to'lov jurnal orqali "
-            "<b>avtomatik</b> tasdiqlanadi (admin kutilmaydi).\n"
-            "🧾 Chek (skrinshot) yuborsangiz ham bo'ladi — u zaxira "
-            "tekshiruv sifatida adminlarga boradi."
-        )
-
-    await message.answer(
-        "🧾 <b>To'lov cheki</b>\n\n"
-        f"To'ldiriladigan miqdor: <b>{amount} ⭐️</b>\n"
-        f"{sum_block}\n"
-        "Quyidagi kartaga o'tkazma qiling:\n"
-        f"💳 <code>{_format_card_number(number)}</code>{holder_line}\n\n"
-        f"{auto_line}",
+    await callback.message.answer(
+        "🧾 Chekni <b>rasm</b> ko'rinishida yuboring (skrinshot).",
         parse_mode="HTML",
         reply_markup=get_topup_cancel_kb(),
     )

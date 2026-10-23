@@ -265,12 +265,12 @@ def test_payment_methods_kb():
     print("== B. get_payment_methods_kb ==")
     kb = get_payment_methods_kb(15)
     cbs = kb_callbacks(kb)
-    ok("pay_xtr tugmasi", f"{CB_PAY_XTR_PREFIX}15" in cbs, str(cbs))
-    ok("pay_balance tugmasi", f"{CB_PAY_BALANCE_PREFIX}15" in cbs)
+    ok("faqat balans tugmasi", f"{CB_PAY_BALANCE_PREFIX}15" in cbs, str(cbs))
+    ok("to'ldirish tugmasi", "topup_start" in cbs, str(cbs))
     ok("orqaga tugmasi", "shop_categories" in cbs)
     texts = kb_texts(kb)
-    ok("matnlar", "⭐️ Rasmiy Telegram Stars (XTR) bilan to'lash" in texts
-       and "💳 Botdagi balansimdan yechish" in texts, str(texts))
+    ok("matnlar", "💳 Botdagi balansimdan sotib olish" in texts
+       and "💳 Balans to'ldirish" in texts, str(texts))
 
 
 def test_shop_menu():
@@ -335,21 +335,21 @@ def test_shop_category():
 
 
 def test_buy_product():
-    print("== E. buy_prod_ tafsilotlari ==")
+    print("== E. buy_prod_ — balansdan xarid ==")
     prods = {1: make_product(1)}
-    env = patch_shop(products=prods)
+    users = {555: SimpleNamespace(user_id=555, stars_balance=150)}
+    env = patch_shop(products=prods, users=users)
 
     async def case():
         cb = FakeCallback(tg_user(555), "buy_prod_1")
         await shop_mod.buy_product(cb)
+        ok("atomik xarid chaqirildi",
+           env.state.balance_order_calls == [(555, 1)],
+           str(env.state.balance_order_calls))
         a = cb.message.answers
-        ok("detallar matni", len(a) == 1
+        ok("chek matni", len(a) == 1
            and "100 Stars" in a[0]["text"] and "100 XTR" in a[0]["text"]
-           and "Eng mashhur to&#x27;plam" in a[0]["text"])
-        cbs = kb_callbacks(a[0]["reply_markup"])
-        ok("usul tanlash klaviaturasi",
-           "pay_xtr_1" in cbs and "pay_balance_1" in cbs
-           and "shop_categories" in cbs, str(cbs))
+           and "Qolgan balans: 50 ⭐️" in a[0]["text"])
 
         # mavjud bo'lmagan
         cb2 = FakeCallback(tg_user(555), "buy_prod_999")
@@ -579,7 +579,12 @@ def test_pay_balance():
            and cb.answers[0]["text"] == shop_mod.ALERT_NOT_ENOUGH_BALANCE,
            str(cb.answers))
         ok("xarid chaqirilmadi", env2.state.balance_order_calls == [])
-        ok("foydalanuvchiga xabar yuborilmadi", cb.message.answers == [])
+        ok("to'ldirish tugmasi yuborildi",
+           len(cb.message.answers) == 1
+           and "Balansingizda Stars yetarli emas" in cb.message.answers[0]["text"]
+           and "topup_start" in kb_callbacks(
+               cb.message.answers[0]["reply_markup"]
+           ))
 
     run(poor_case())
     env2.restore()

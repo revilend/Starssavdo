@@ -104,6 +104,8 @@ SETTING_REFERRAL_REWARD: Final[str] = "referral_reward_stars"
 SETTING_MIN_WITHDRAWAL: Final[str] = "min_withdrawal_stars"
 SETTING_CARD_NUMBER: Final[str] = "payment_card_number"
 SETTING_CARD_HOLDER: Final[str] = "payment_card_holder"
+SETTING_STAR_PRICE: Final[str] = "star_price_uzs"
+SETTING_CARD_LOG_CHAT: Final[str] = "card_log_chat_id"
 
 # Balans to'ldirish so'rovlari statuslari
 DEPOSIT_PENDING: Final[str] = "pending"
@@ -1713,6 +1715,41 @@ class SettingsRepository:
         """
         async with get_session() as session:
             return await _load_setting(session, key, default)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_int_setting(key: str, default: int) -> int:
+        """Butun son sozlamasini o'qiydi (noto'g'ri/NULL bo'lsa `default`)."""
+        value = await SettingsRepository.get_setting(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_star_price() -> int:
+        """
+        1 ⭐️ ning so'mdagi narxi (`settings.star_price_uzs`).
+
+        Bazada yo'q bo'lsa `.env` dagi `SOM_PER_STAR` (standart 250) ishlatiladi.
+        """
+        price = await SettingsRepository.get_int_setting(
+            SETTING_STAR_PRICE, app_settings.SOM_PER_STAR
+        )
+        return price if price > 0 else app_settings.SOM_PER_STAR
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_card_log_chat_id() -> int:
+        """
+        Karta to'lovlari jurnali chat ID'si (`settings.card_log_chat_id`).
+
+        `0` — sozlanmagan (bot baribir guruh/kanal xabarlarini o'qiydi).
+        """
+        return await SettingsRepository.get_int_setting(
+            SETTING_CARD_LOG_CHAT, app_settings.CARD_LOG_CHAT_ID
+        )
 
     # ------------------------------------------------------------------
     @staticmethod

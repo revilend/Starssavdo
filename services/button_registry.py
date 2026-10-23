@@ -126,7 +126,7 @@ BUTTONS: dict[str, ButtonSpec] = {
     ),
     "pay_balance": ButtonSpec(
         "pay_balance",
-        "💳 Botdagi balansimdan yechish",
+        "💳 Botdagi balansimdan sotib olish",
         "shop",
         STYLE_PRIMARY,
         "💳",

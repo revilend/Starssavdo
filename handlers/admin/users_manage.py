@@ -31,9 +31,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config.settings import settings
 from database.queries import (
     SETTING_CARD_HOLDER,
+    SETTING_CARD_LOG_CHAT,
     SETTING_CARD_NUMBER,
     SETTING_MIN_WITHDRAWAL,
     SETTING_REFERRAL_REWARD,
+    SETTING_STAR_PRICE,
     TX_ADMIN_ADJUST,
     InsufficientBalanceError,
     SettingsRepository,
@@ -58,6 +60,8 @@ router.callback_query.filter(F.from_user.id.in_(settings.ADMIN_IDS))
 CB_UM_SET_REF = "adm_um_set_ref"
 CB_UM_SET_MIN = "adm_um_set_min"
 CB_UM_SET_CARD = "adm_um_set_card"
+CB_UM_SET_PRICE = "adm_um_set_price"
+CB_UM_SET_LOG = "adm_um_set_log"
 
 # -------------------------------------------------------------
 # Matnlar (HTML)
@@ -66,9 +70,31 @@ SETTINGS_MENU_TEXT = (
     "⭐️ <b>TIZIM SOZLAMALARI</b>\n\n"
     "Joriy qiymatlar:\n"
     "├ Bir referal uchun: <b>{ref_reward} ⭐️</b>\n"
-    "└ Minimal yechib olish: <b>{min_withdrawal} ⭐️</b>\n\n"
+    "├ Minimal yechib olish: <b>{min_withdrawal} ⭐️</b>\n"
+    "├ 1 ⭐️ narxi: <b>{star_price} so'm</b>\n"
+    "└ Xabarnoma guruhi: <code>{log_chat}</code>\n\n"
     "Qaysirini o'zgartirmoqchisiz?"
 )
+
+ASK_STAR_PRICE_TEXT = (
+    "⭐️ <b>1 Stars narxini o'zgartirish</b>\n\n"
+    "Joriy narx: <b>{current} so'm</b>\n\n"
+    "Yangi narxni so'mda yuboring (butun son, kamida 1).\n"
+    "Masalan: <code>250</code>\n\n"
+    "Bekor qilish: /cancel"
+)
+
+ASK_LOG_CHAT_TEXT = (
+    "📢 <b>Xabarnoma guruhi / kanali</b>\n\n"
+    "Joriy ID: <code>{current}</code>\n\n"
+    "Karta to'lovlari xabarlari keladigan guruh/kanal chat ID sini "
+    "yuboring (masalan: <code>-1001234567890</code>).\n\n"
+    "O'chirish uchun <code>0</code> yuboring.\n\n"
+    "Bekor qilish: /cancel"
+)
+
+SAVED_PRICE_TEXT = "✅ Saqlandi: <b>1 ⭐️ = {value} so'm</b>"
+SAVED_LOG_TEXT = "✅ Saqlandi: xabarnoma guruhi <code>{value}</code>"
 
 ASK_REF_REWARD_TEXT = (
     "⭐️ <b>Referal narxini o'zgartirish</b>\n\n"
@@ -154,8 +180,32 @@ def _settings_menu_kb() -> InlineKeyboardMarkup:
         callback_data=CB_UM_SET_CARD,
         style="success",
     )
+    builder.button(
+        text="⭐️ 1 Stars narxi (so'm)",
+        callback_data=CB_UM_SET_PRICE,
+        style="primary",
+    )
+    builder.button(
+        text="📢 Xabarnoma guruhi ID",
+        callback_data=CB_UM_SET_LOG,
+        style="primary",
+    )
     builder.adjust(1)
     return builder.as_markup()
+
+
+async def _settings_menu_data() -> tuple[str, InlineKeyboardMarkup]:
+    """Tizim sozlamalari menyusining (matn, klaviatura) juftligi."""
+    ref_reward, min_withdrawal = await _current_settings()
+    star_price = await SettingsRepository.get_star_price()
+    log_chat = await SettingsRepository.get_card_log_chat_id()
+    text = SETTINGS_MENU_TEXT.format(
+        ref_reward=ref_reward,
+        min_withdrawal=min_withdrawal,
+        star_price=star_price,
+        log_chat=log_chat or "sozlanmagan",
+    )
+    return text, _settings_menu_kb()
 
 
 async def _current_card() -> tuple[str, str]:
@@ -193,17 +243,14 @@ async def _current_settings() -> tuple[int, int]:
 @router.message(ManualBalanceStates.waiting_for_amount, F.text == "/cancel")
 @router.message(PaymentCardStates.waiting_for_number, F.text == "/cancel")
 @router.message(PaymentCardStates.waiting_for_holder, F.text == "/cancel")
+@router.message(PaymentCardStates.waiting_for_star_price, F.text == "/cancel")
+@router.message(PaymentCardStates.waiting_for_log_chat, F.text == "/cancel")
 async def users_manage_cancel(message: Message, state: FSMContext) -> None:
     """FSM holatini tozalaydi va sozlamalar menyusiga qaytadi."""
     await state.clear()
     await message.answer(CANCELLED_TEXT)
-    ref_reward, min_withdrawal = await _current_settings()
-    await message.answer(
-        SETTINGS_MENU_TEXT.format(
-            ref_reward=ref_reward, min_withdrawal=min_withdrawal
-        ),
-        reply_markup=_settings_menu_kb(),
-    )
+    text, kb = await _settings_menu_data()
+    await message.answer(text, reply_markup=kb)
 
 
 # =============================================================
@@ -212,14 +259,9 @@ async def users_manage_cancel(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == CB_ADM_REF_PRICE)
 async def settings_menu(callback: CallbackQuery) -> None:
     """[ ⭐️ Referal narxini sozlash ] — joriy qiymatlar bilan sub-menu."""
-    ref_reward, min_withdrawal = await _current_settings()
+    text, kb = await _settings_menu_data()
     await callback.answer()
-    await callback.message.answer(
-        SETTINGS_MENU_TEXT.format(
-            ref_reward=ref_reward, min_withdrawal=min_withdrawal
-        ),
-        reply_markup=_settings_menu_kb(),
-    )
+    await callback.message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == CB_UM_SET_REF)
@@ -258,13 +300,8 @@ async def set_ref_reward_apply(message: Message, state: FSMContext) -> None:
     await message.answer(
         SAVED_TEXT.format(key="Bitta referal uchun", value=value)
     )
-    ref_reward, min_withdrawal = await _current_settings()
-    await message.answer(
-        SETTINGS_MENU_TEXT.format(
-            ref_reward=ref_reward, min_withdrawal=min_withdrawal
-        ),
-        reply_markup=_settings_menu_kb(),
-    )
+    text, kb = await _settings_menu_data()
+    await message.answer(text, reply_markup=kb)
 
 
 @router.message(ChangeSettingsStates.waiting_for_min_withdrawal, F.text)
@@ -283,13 +320,8 @@ async def set_min_withdrawal_apply(message: Message, state: FSMContext) -> None:
     await message.answer(
         SAVED_TEXT.format(key="Minimal yechib olish", value=value)
     )
-    ref_reward, min_withdrawal = await _current_settings()
-    await message.answer(
-        SETTINGS_MENU_TEXT.format(
-            ref_reward=ref_reward, min_withdrawal=min_withdrawal
-        ),
-        reply_markup=_settings_menu_kb(),
-    )
+    text, kb = await _settings_menu_data()
+    await message.answer(text, reply_markup=kb)
 
 
 # =============================================================
@@ -360,6 +392,79 @@ async def set_card_holder(message: Message, state: FSMContext) -> None:
 
 
 # =============================================================
+# 2.1. 1 STARS NARXI (so'm)
+# =============================================================
+@router.callback_query(F.data == CB_UM_SET_PRICE)
+async def set_star_price_start(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """⭐️ 1 Stars narxini o'zgartirish — yangi narx so'raydi."""
+    price = await SettingsRepository.get_star_price()
+    await state.set_state(PaymentCardStates.waiting_for_star_price)
+    await callback.answer()
+    await callback.message.answer(ASK_STAR_PRICE_TEXT.format(current=price))
+
+
+@router.message(PaymentCardStates.waiting_for_star_price, F.text)
+async def set_star_price_apply(message: Message, state: FSMContext) -> None:
+    """Yangi 1 Stars narxini bazaga yozadi."""
+    raw = (message.text or "").strip().replace(" ", "").replace(",", "")
+    if not raw.isdigit() or int(raw) < 1:
+        await message.answer("⚠️ Narx kamida 1 so'm bo'lishi kerak (masalan: 250).")
+        return
+
+    value = int(raw)
+    await SettingsRepository.update_setting(SETTING_STAR_PRICE, value)
+    await state.clear()
+    logger.info("1 Stars narxi o'zgardi (admin): %s -> %s so'm", message.from_user.id, value)
+
+    await message.answer(SAVED_PRICE_TEXT.format(value=value))
+    text, kb = await _settings_menu_data()
+    await message.answer(text, reply_markup=kb)
+
+
+# =============================================================
+# 2.2. XABARNOMA GURUHI / KANALI (chat ID)
+# =============================================================
+@router.callback_query(F.data == CB_UM_SET_LOG)
+async def set_log_chat_start(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """📢 Karta to'lovlari xabarnoma chatini o'zgartirish."""
+    current = await SettingsRepository.get_card_log_chat_id()
+    await state.set_state(PaymentCardStates.waiting_for_log_chat)
+    await callback.answer()
+    await callback.message.answer(
+        ASK_LOG_CHAT_TEXT.format(current=current or "sozlanmagan")
+    )
+
+
+@router.message(PaymentCardStates.waiting_for_log_chat, F.text)
+async def set_log_chat_apply(message: Message, state: FSMContext) -> None:
+    """Xabarnoma chat ID sini bazaga yozadi (0 — o'chirish)."""
+    raw = (message.text or "").strip().replace(" ", "")
+    if not raw.lstrip("-").isdigit():
+        await message.answer(
+            "⚠️ Chat ID butun son bo'lishi kerak (masalan: -1001234567890)."
+        )
+        return
+
+    value = int(raw)
+    await SettingsRepository.update_setting(SETTING_CARD_LOG_CHAT, value)
+    await state.clear()
+    logger.info(
+        "Karta xabarnoma chat ID o'zgardi (admin): %s -> %s",
+        message.from_user.id, value,
+    )
+
+    await message.answer(
+        SAVED_LOG_TEXT.format(value=value or "sozlanmagan")
+    )
+    text, kb = await _settings_menu_data()
+    await message.answer(text, reply_markup=kb)
+
+
+# =============================================================
 # 3. BALANSNI QO'LDA O'ZGARTIRISH
 # =============================================================
 @router.callback_query(F.data == CB_ADM_BALANCE_EDIT)
@@ -402,7 +507,6 @@ async def balance_edit_apply(message: Message, state: FSMContext) -> None:
     """Miqdorni (+/-) qabul qilib, balansni atomik tarzda yangilaydi."""
     data = await state.get_data()
     user_id = int(data["user_id"])
-    name = str(data.get("name", user_id))
 
     raw = (message.text or "").strip().replace(" ", "")
     if raw.startswith("+"):

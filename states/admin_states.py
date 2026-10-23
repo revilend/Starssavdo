@@ -63,7 +63,9 @@ class ButtonEditStates(StatesGroup):
 
 
 class PaymentCardStates(StatesGroup):
-    """To'lov kartasi rekvizitlarini o'zgartirish (UZCARD/HUMO)."""
+    """To'lov sozlamalari (UZCARD/HUMO karta, narx, xabarnoma guruhi)."""
 
-    waiting_for_number = State()  # Karta raqami (16-19 raqam)
-    waiting_for_holder = State()  # Karta egasining F.I.SH.
+    waiting_for_number = State()     # Karta raqami (16-19 raqam)
+    waiting_for_holder = State()     # Karta egasining F.I.SH.
+    waiting_for_star_price = State()  # 1 Stars narxi (so'm)
+    waiting_for_log_chat = State()    # Xabarnoma guruhi/kanali chat ID

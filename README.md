@@ -209,31 +209,46 @@ taklif qilinadi:
 
 1. Admin panel → **⭐️ Referal narxini sozlash** → **💳 To'lov kartasi**:
    karta raqami (16–19 raqam) va egasi kiritiladi
-   (`payment_card_number`, `payment_card_holder`).
+   (`payment_card_number`, `payment_card_holder`). Shu menyuda
+   **⭐️ 1 Stars narxi** (`star_price_uzs`, standart 250 so'm) va
+   **📢 Xabarnoma guruhi ID** (`card_log_chat_id`) ham sozlanadi.
 2. **💳 Balans to'ldirish** → **💳 Uzcard / Humo kartaga o'tkazish** →
-   Stars miqdori kiritiladi (min 10 ⭐️). Bot summani hisoblaydi:
-   `stars × SOM_PER_STAR + 1..99 so'm unikal kod` (masalan 100 ⭐️ va
-   `SOM_PER_STAR=250` → **25 037 so'm**). Unikal kod takrorlanmaydi.
+   tayyor miqdor tugmasi (50/100/250/500/1000 ⭐️) yoki o'z miqdori
+   kiritiladi (min 10 ⭐️). Bot summani hisoblaydi:
+   `stars × star_price_uzs + 1..99 so'm unikal kod` (masalan 100 ⭐️ va
+   250 so'm → **25 043 so'm**). Unikal kod takrorlanmaydi.
 3. Foydalanuvchi aynan shu summani kartaga o'tkazadi. `@CardXabarBot` /
-   `@HUMOcardbot` xabari `CARD_LOG_CHAT_ID` chatiga tushganda bot matndan
-   summani ajratadi (`10 037`, `10037`, `10,037`, NBSP — barchasi) va
-   `pending` so'rovni topib balansni **admin aralashuvisiz atomik**
-   to'ldiradi (`deposits` + `deposit` audit yozuvi), foydalanuvchiga xabar
-   yuboradi.
+   `@HUMOcardbot` xabari bot a'zo bo'lgan **har qanday guruh/kanalga**
+   tushganda bot matndan summani ajratadi (`10 037`, `10037`, `10,037`,
+   NBSP — barchasi) va `pending` so'rovni topib balansni **admin
+   aralashuvisiz atomik** to'ldiradi (`deposits` + `deposit` audit
+   yozuvi), foydalanuvchiga «🎉 To'lovingiz avtomatik qabul qilindi!»
+   xabarini yuboradi.
 4. Zaxira yo'l: foydalanuvchi chek skrinshotini yuborsa, chek o'sha
    so'rovga biriktiriladi va barcha adminlarga **[✅ Tasdiqlash] /
    [❌ Rad etish]** bilan boradi. Rad etilsa balans o'zgarmaydi.
 5. Ikki marta hisoblanmaydi — so'rov `pending` holatidan chiqadi
    (avtomatik tasdiqlash ham, admin tasdig'i ham idempotent).
 
-Sozlash: `SOM_PER_STAR` (1 ⭐️ narxi, so'm) va `CARD_LOG_CHAT_ID` (jurnal
-chati ID; `0` — avtomatik tasdiqlash o'chirilgan).
+Sozlash: admin panel → **⭐️ Referal narxini sozlash** bo'limi
+(`star_price_uzs`, `card_log_chat_id`). `.env` dagi `SOM_PER_STAR` va
+`CARD_LOG_CHAT_ID` faqat baza qiymati yo'q bo'lsa fallback bo'ladi.
 
 > **Telegram cheklovi:** botlar boshqa botlar yuborgan **guruh** xabarlarini
 > olmaydi. Shuning uchun jurnal sifatida **kanal** ishlating (bank boti
 > kanalga post qiladi, bizning bot kanal admini bo'ladi) yoki to'lov
 > xabarini botga qo'lda forward qiling. Bu holatda ham chek + admin yo'li
 > ishlaydi.
+
+## 🛍 Do'kon — faqat bot balansi orqali
+
+Mahsulot tugmasi bosilganda buyurtma darhol **bot balansidan** to'lanadi
+(`orders` + `purchase` audit atomik yozuv), Stars yetarli bo'lmasa
+foydalanuvchiga «❌ Balansingizda Stars yetarli emas!» xabari va
+**[💳 Balans to'ldirish]** tugmasi yuboriladi. `gift_id` mavjud bo'lsa
+sovg'a `sendGift` bilan avtomatik jo'natiladi va adminga xarid haqida
+xabarnoma boradi. Telegram Stars (XTR) invoysi endi faqat balansni
+to'ldirishda ishlatiladi, mahsulot xaridida emas.
 
 `deposits`, `transactions`, `users` jadvallari va yetishmayotgan barcha
 ustunlar (`pay_amount`, `payment_comment`, `users.total_earned_stars`, ...)

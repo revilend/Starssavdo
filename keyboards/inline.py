@@ -44,6 +44,12 @@ CB_TOPUP_START = "topup_start"
 CB_TOPUP_CANCEL = "topup_cancel"
 CB_TOPUP_AUTO = "topup_auto"
 CB_TOPUP_CARD = "topup_card"
+CB_TOPUP_MANUAL = "topup_manual"
+CB_TOPUP_RECEIPT = "topup_receipt"
+CB_TOPUP_PRESET_PREFIX = "tamt_"
+
+# Tez tanlash uchun tayyor Stars to'plamlari (karta usulida)
+TOPUP_PRESETS: tuple[int, ...] = (50, 100, 250, 500, 1000)
 CB_TX_HISTORY = "tx_history"
 
 # Xarid callback prefikslari
@@ -163,23 +169,34 @@ def get_products_list_kb(
 # =============================================================
 def get_payment_methods_kb(product_id: int) -> InlineKeyboardMarkup:
     """
-    Xarid usulini tanlash:
+    Xaridni bot balansi orqali tasdiqlash:
 
-        [ ⭐️ Rasmiy Telegram Stars (XTR) bilan to'lash ]  (pay_xtr_{id})
-        [ 💳 Botdagi balansimdan yechish ]                (pay_balance_{id})
-        [ ◀️ Orqaga ]                                      (shop_categories)
+        [ 💳 Botdagi balansimdan sotib olish ]  (pay_balance_{id})
+        [ 💳 Balans to'ldirish ]                (topup_start)
+        [ ◀️ Orqaga ]                          (shop_categories)
+
+    Do'kondagi to'lov faqat bot balansi orqali amalga oshiriladi.
     """
     builder = InlineKeyboardBuilder()
-    builder.row(
-        build_inline_button(
-            "pay_xtr", callback_data=f"{CB_PAY_XTR_PREFIX}{product_id}"
-        )
-    )
     builder.row(
         build_inline_button(
             "pay_balance", callback_data=f"{CB_PAY_BALANCE_PREFIX}{product_id}"
         )
     )
+    builder.row(build_inline_button("topup", callback_data=CB_TOPUP_START))
+    builder.row(
+        build_inline_button("shop_back", callback_data=CB_SHOP_CATEGORIES)
+    )
+    return builder.as_markup()
+
+
+# =============================================================
+# 3.2. BALANS YETARLI EMAS — TO'LDIRISHGA YO'NALTIRISH
+# =============================================================
+def get_topup_needed_kb() -> InlineKeyboardMarkup:
+    """Balans yetarli bo'lmaganda: [💳 Balans to'ldirish] + orqaga."""
+    builder = InlineKeyboardBuilder()
+    builder.row(build_inline_button("topup", callback_data=CB_TOPUP_START))
     builder.row(
         build_inline_button("shop_back", callback_data=CB_SHOP_CATEGORIES)
     )
@@ -259,6 +276,61 @@ def get_balance_kb(stars_balance: int, min_withdrawal: int) -> InlineKeyboardMar
 def get_topup_cancel_kb() -> InlineKeyboardMarkup:
     """To'ldirish oqimida [ ❌ Yopish ] + [ ◀️ Bosh menyu ]."""
     builder = InlineKeyboardBuilder()
+    builder.row(build_inline_button("close", callback_data=CB_TOPUP_CANCEL))
+    builder.row(build_inline_button("menu_back", callback_data=CB_BACK_TO_MENU))
+    return builder.as_markup()
+
+
+# =============================================================
+# 6.0. KARTA USULI — STARS MIQDORINI TEZ TANLASH
+# =============================================================
+def get_topup_presets_kb() -> InlineKeyboardMarkup:
+    """
+    Karta usuli uchun tayyor miqdorlar:
+
+        [ 50 ⭐️ ] [ 100 ⭐️ ] [ 250 ⭐️ ]
+        [ 500 ⭐️ ] [ 1000 ⭐️ ]
+        [ ✍️ Boshqa miqdor ]   (topup_manual)
+        [ ❌ Yopish ]          (topup_cancel)
+    """
+    builder = InlineKeyboardBuilder()
+    for amount in TOPUP_PRESETS:
+        builder.button(
+            text=f"{amount} ⭐️",
+            callback_data=f"{CB_TOPUP_PRESET_PREFIX}{amount}",
+            style="primary",
+        )
+    builder.adjust(3, 2, 1, 1)
+    builder.row(
+        InlineKeyboardButton(
+            text="✍️ Boshqa miqdor",
+            callback_data=CB_TOPUP_MANUAL,
+            style="success",
+        )
+    )
+    builder.row(build_inline_button("close", callback_data=CB_TOPUP_CANCEL))
+    return builder.as_markup()
+
+
+# =============================================================
+# 6.0.1. KARTA TO'LOVI — CHEK / TASDIQLASH
+# =============================================================
+def get_topup_receipt_kb() -> InlineKeyboardMarkup:
+    """
+    To'lovdan keyingi klaviatura:
+
+        [ 🧾 To'lov qildim / Chek yuborish ]  (topup_receipt)
+        [ ❌ Yopish ]                         (topup_cancel)
+        [ ◀️ Bosh menyu ]                     (back_to_menu)
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="🧾 To'lov qildim / Chek yuborish",
+            callback_data=CB_TOPUP_RECEIPT,
+            style="success",
+        )
+    )
     builder.row(build_inline_button("close", callback_data=CB_TOPUP_CANCEL))
     builder.row(build_inline_button("menu_back", callback_data=CB_BACK_TO_MENU))
     return builder.as_markup()

@@ -71,7 +71,7 @@ EXIT_TEXT = "👋 Admin paneldan chiqildi. Asosiy menyuga qaytdingiz."
 # 1. PANELNI OCHISH (reply tugma yoki /admin)
 # =============================================================
 @router.message(StateFilter("*"), ButtonText("menu_admin"))
-@router.message(StateFilter("*"), F.text.contains("Admin Panel"))
+@router.message(StateFilter("*"), F.text.contains("Admin"))
 async def admin_panel_open(
     message: Message, state: FSMContext | None = None
 ) -> None:

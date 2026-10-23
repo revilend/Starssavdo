@@ -55,9 +55,9 @@ from keyboards.inline import (
     CB_PAY_XTR_PREFIX,
     CB_SHOP_CATEGORIES,
     CATEGORY_EMOJI,
-    get_payment_methods_kb,
     get_products_list_kb,
     get_shop_categories_kb,
+    get_topup_needed_kb,
 )
 from services.button_registry import ButtonText
 from services.gift_delivery import deliver_gift
@@ -143,6 +143,16 @@ ALERT_NOT_ENOUGH_BALANCE = (
 ALERT_CATEGORY_NOT_FOUND = "❌ Toifa topilmadi!"
 ALERT_INVOICE_FAILED = "❌ Invoysni yuborib bo'lmadi! Keyinroq urinib ko'ring."
 ALERT_PURCHASE_FAILED = "❌ Xaridni amalga oshirib bo'lmadi! Keyinroq urinib ko'ring."
+
+# Balans yetarli bo'lmaganda yuboriladigan xabar (pastda to'ldirish tugmasi)
+NOT_ENOUGH_BALANCE_TEXT = (
+    "❌ <b>Balansingizda Stars yetarli emas!</b>\n\n"
+    "├ Mahsulot narxi: <b>{price} ⭐️</b>\n"
+    "├ Joriy balans: <b>{balance} ⭐️</b>\n"
+    "└ Yetishmayapti: <b>{missing} ⭐️</b>\n\n"
+    "Avval «💳 Balans to'ldirish» bo'limidan hisobingizni to'ldiring — "
+    "to'lov avtomatik tasdiqlanadi."
+)
 
 
 # =============================================================
@@ -302,33 +312,112 @@ async def shop_categories_callback(
 # =============================================================
 # 3. MAHSULOT — TASHILOTLARI VA USUL TANLASH
 # =============================================================
-@router.callback_query(F.data.startswith("buy_prod_"))
-async def buy_product(callback: CallbackQuery) -> None:
-    """Mahsulot tafsilotlari + to'lov usulini tanlash taklifi."""
-    product_id = _parse_product_id(callback.data or "", "buy_prod_")
-    if product_id is None:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
-        return
+async def _purchase_with_balance(
+    callback: CallbackQuery, product_id: int
+) -> None:
+    """
+    Mahsulotni faqat BOT BALANSI orqali sotib oladi.
 
+    Balans yetarli bo'lmasa — foydalanuvchiga to'ldirish tugmasi yuboriladi;
+    yetarli bo'lsa — balans atomik yechiladi, sovg'a (gift_id bo'lsa)
+    avtomatik yuboriladi va adminga xabarnoma boradi.
+    """
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
         return
 
-    emoji = CATEGORY_EMOJI.get(product.category, "🛍")
-    await callback.answer()
-    await callback.message.answer(
-        PRODUCT_DETAIL_TEXT.format(
-            emoji=emoji,
-            title=html.escape(product.title),
-            description=html.escape(
-                product.description or "Tavsif kiritilmagan"
+    user_id = callback.from_user.id
+    user = await UserRepository.get_user(user_id)
+    if user is None:
+        await callback.answer(
+            "❌ Profilingiz topilmadi! /start buyrug'ini bosing.",
+            show_alert=True,
+        )
+        return
+
+    if user.stars_balance < product.price_xtr:
+        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
+        await callback.message.answer(
+            NOT_ENOUGH_BALANCE_TEXT.format(
+                price=product.price_xtr,
+                balance=user.stars_balance,
+                missing=product.price_xtr - user.stars_balance,
             ),
+            parse_mode="HTML",
+            reply_markup=get_topup_needed_kb(),
+        )
+        return
+
+    # Atomik xarid (balans - , audit, order=pending -> paid)
+    try:
+        order = await OrderRepository.create_balance_order(user_id, product.id)
+    except InsufficientBalanceError:
+        # Parallel sarf — balans shu oraliqda kamaygan bo'lishi mumkin
+        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
+        await callback.message.answer(
+            NOT_ENOUGH_BALANCE_TEXT.format(
+                price=product.price_xtr,
+                balance=0,
+                missing=product.price_xtr,
+            ),
+            parse_mode="HTML",
+            reply_markup=get_topup_needed_kb(),
+        )
+        return
+    except RepositoryError:
+        logger.exception(
+            "Balans xaridi amalga oshmadi: user=%s product=%s",
+            user_id, product.id,
+        )
+        await callback.answer(ALERT_PURCHASE_FAILED, show_alert=True)
+        return
+
+    new_balance = user.stars_balance - product.price_xtr
+    await callback.answer("✅ Xarid muvaffaqiyatli!")
+    await callback.message.answer(
+        BALANCE_RECEIPT_TEXT.format(
+            order_id=order.id,
+            product_name=html.escape(product.title),
             price=product.price_xtr,
+            new_balance=new_balance,
         ),
         parse_mode="HTML",
-        reply_markup=get_payment_methods_kb(product.id),
     )
+
+    # Gift mahsuloti bo'lsa — avtomatik sendGift (gift_id mavjud bo'lsa)
+    delivered = await deliver_gift(callback.bot, user_id, product)
+    if delivered:
+        await callback.message.answer(
+            "🎁 <b>Sovg'angiz avtomatik yuborildi!</b>\n"
+            "Telegram sovg'alar bo'limidan ko'rishingiz mumkin."
+        )
+
+    # Adminga har doim xabarnoma (yetkazish nazorati uchun)
+    await _notify_admins(
+        callback.bot, callback.from_user, product.title, product.price_xtr
+    )
+
+    logger.info(
+        "Balans orqali xarid: user=%s order=%s product=%s -%sXTR gift=%s",
+        user_id, order.id, product.id, product.price_xtr, delivered,
+    )
+
+
+@router.callback_query(StateFilter("*"), F.data.startswith("buy_prod_"))
+async def buy_product(
+    callback: CallbackQuery, state: FSMContext | None = None
+) -> None:
+    """Mahsulot tanlandi — darhol bot balansidan sotib olinadi."""
+    if state is not None:
+        await state.clear()
+
+    product_id = _parse_product_id(callback.data or "", "buy_prod_")
+    if product_id is None:
+        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        return
+
+    await _purchase_with_balance(callback, product_id)
 
 
 # =============================================================
@@ -519,79 +608,14 @@ async def on_successful_payment(message: Message) -> None:
 
 
 # =============================================================
-# 5. BOT BALANSI ORQALI XARID
+# 5. BOT BALANSI ORQALI XARID (eski "pay_balance_" tugmalari uchun)
 # =============================================================
 @router.callback_query(F.data.startswith(CB_PAY_BALANCE_PREFIX))
 async def pay_with_balance(callback: CallbackQuery) -> None:
-    """
-    Bot balansidan xarid: balans tekshiriladi, yetarli bo'lsa
-    atomik ravishda balansdan ayriladi, `transactions`ga log yoziladi
-    va buyurtma darhol `paid` qilinadi.
-    """
+    """Bot balansidan xarid — `_purchase_with_balance` orqali."""
     product_id = _parse_product_id(callback.data or "", CB_PAY_BALANCE_PREFIX)
     if product_id is None:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
         return
 
-    product = await ProductRepository.get_product_by_id(product_id)
-    if product is None or not product.is_active:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
-        return
-
-    user_id = callback.from_user.id
-
-    # Do'stlar orqali to'plangan balans tekshiriladi
-    user = await UserRepository.get_user(user_id)
-    if user is None:
-        await callback.answer(
-            "❌ Profilingiz topilmadi! /start buyrug'ini bosing.",
-            show_alert=True,
-        )
-        return
-
-    if user.stars_balance < product.price_xtr:
-        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
-        return
-
-    # Atomik xarid (balans - , audit, order=pending -> paid)
-    try:
-        order = await OrderRepository.create_balance_order(user_id, product.id)
-    except InsufficientBalanceError:
-        # Parallel sarf — balans shu oraliqda kamaygan bo'lishi mumkin
-        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
-        return
-    except RepositoryError:
-        logger.exception(
-            "Balans xaridi amalga oshmadi: user=%s product=%s",
-            user_id, product.id,
-        )
-        await callback.answer(ALERT_PURCHASE_FAILED, show_alert=True)
-        return
-
-    new_balance = user.stars_balance - product.price_xtr
-    await callback.answer("✅ Xarid muvaffaqiyatli!")
-    await callback.message.answer(
-        BALANCE_RECEIPT_TEXT.format(
-            order_id=order.id,
-            product_name=html.escape(product.title),
-            price=product.price_xtr,
-            new_balance=new_balance,
-        ),
-        parse_mode="HTML",
-    )
-
-    # Gift mahsuloti bo'lsa — avtomatik sendGift, aks holda adminga xabar
-    delivered = await deliver_gift(callback.bot, user_id, product)
-    if delivered:
-        await callback.message.answer(
-            "🎁 <b>Sovg'angiz avtomatik yuborildi!</b>"
-        )
-    else:
-        await _notify_admins(
-            callback.bot, callback.from_user, product.title, product.price_xtr
-        )
-
-    logger.info(
-        "Balans orqali xarid: user=%s order=%s product=%s -%sXTR gift=%s",
-        user_id, order.id, product.id, product.price_xtr, delivered,
-    )
+    await _purchase_with_balance(callback, product_id)

@@ -8,8 +8,9 @@ Qanday ishlaydi:
     `stars * SOM_PER_STAR + 1..99 so'm` unikal summa bilan `pending`
     so'rov yaratadi (masalan 100 ⭐️ -> 25 037 so'm).
  2. `@CardXabarBot` / `@HUMOcardbot` yopiq guruh/kanalga to'lov xabarini
-    yuboradi; bot o'sha chatda (`CARD_LOG_CHAT_ID`) turib, xabar matnidan
-    summani ajratadi (`services/card_payment.py`).
+    yuboradi; bot o'sha guruh/kanalda (yoki admin panelda sozlangan
+    `card_log_chat_id` chatida) turib, xabar matnidan summani ajratadi
+    (`services/card_payment.py`).
  3. Summa `pending` so'rovga to'g'ri kelsa — balans **admin aralashuvisiz**
     atomik qo'shiladi (`DepositRepository.auto_confirm_deposit`), so'rov
     `approved` bo'ladi va foydalanuvchiga xabar boradi.
@@ -30,6 +31,7 @@ zaxira sifatida ishlaydi.
 from __future__ import annotations
 
 import logging
+import time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -43,6 +45,7 @@ from database.queries import (
     DEPOSIT_PENDING,
     DepositRepository,
     RepositoryError,
+    SettingsRepository,
 )
 from services.card_payment import find_payment_amount, format_som
 
@@ -51,18 +54,56 @@ logger = logging.getLogger(__name__)
 router = Router(name="card_auto")
 
 
+# Sozlangan chat ID keshi (har xabar uchun DB so'rovi qilmaslik uchun)
+_chat_cache: dict[str, float | int] = {"value": 0, "at": 0.0}
+_CHAT_CACHE_TTL = 60.0  # soniya
+
+
+async def _configured_log_chat_id() -> int:
+    """Bazadagi (yoki .env dagi) xabarnoma chat ID sini kesh bilan qaytaradi."""
+    now = time.monotonic()
+    if now - float(_chat_cache["at"]) < _CHAT_CACHE_TTL:
+        return int(_chat_cache["value"])
+
+    try:
+        chat_id = await SettingsRepository.get_card_log_chat_id()
+    except Exception:  # noqa: BLE001 — DB/network xatosi botni to'xtatmasin
+        logger.warning(
+            "Xabarnoma chat ID sini o'qib bo'lmadi — .env qiymati ishlatiladi"
+        )
+        chat_id = settings.CARD_LOG_CHAT_ID
+
+    _chat_cache["value"] = chat_id
+    _chat_cache["at"] = now
+    return chat_id
+
+
 class CardLogChat(Filter):
     """
-    Xabar `CARD_LOG_CHAT_ID` chatidan kelganini tekshiradi.
+    Karta to'lovlari xabari kelgan chatni aniqlaydi.
 
-    `CARD_LOG_CHAT_ID=0` (o'chirilgan) bo'lsa hech qachon mos kelmaydi.
-    Settings runtime'da o'qiladi — chat ID'ni qayta ishga tushirmasdan
-    almashtirish testlarda qulay.
+    Mos keladi, agar:
+      - chat ID admin panelda (`settings.card_log_chat_id`) yoki `.env` dagi
+        `CARD_LOG_CHAT_ID` ga teng bo'lsa; YOKI
+      - xabar bot a'zo bo'lgan **har qanday guruh/superguruh/kanalga**
+        tushgan bo'lsa (bank boti post qiladigan yopiq guruh shu yerda).
+
+    Shu bilan `@CardXabarBot` / `@HUMOcardbot` xabarlari qaysi guruhga
+    tushishidan qat'i nazar o'qiladi — admin qo'lda chat ID kiritishi shart
+    emas. Kiritilsa, o'sha chat ID ham qo'shimcha tekshiriladi.
     """
 
     async def __call__(self, message: Message) -> bool:
-        chat_id = settings.CARD_LOG_CHAT_ID
-        return bool(chat_id) and message.chat.id == chat_id
+        chat_type = getattr(message.chat, "type", "") or ""
+
+        # Guruh/kanal xabari — DB'ga murojaat qilmasdan darhol qabul qilinadi
+        # (bank boti xabarlari aynan shu yerga tushadi).
+        if chat_type in {"group", "supergroup", "channel"}:
+            return True
+
+        # Boshqa (masalan, admin qo'lda sozlagan) chat — ID bo'yicha.
+        configured = await _configured_log_chat_id()
+        return bool(configured) and message.chat.id == configured
 
 
 router.message.filter(CardLogChat())
@@ -70,7 +111,7 @@ router.channel_post.filter(CardLogChat())
 
 # Foydalanuvchiga yuboriladigan xabar (avtomatik tasdiqlash)
 AUTO_CREDIT_USER_TEXT = (
-    "✅ <b>To'lov avtomatik tasdiqlandi!</b>\n\n"
+    "🎉 <b>To'lovingiz avtomatik qabul qilindi!</b>\n\n"
     "├ Miqdor: <b>+{amount} ⭐️</b>\n"
     "├ To'lov: <b>{pay_amount} so'm</b>\n"
     "├ Yangi balans: <b>{balance} ⭐️</b>\n"

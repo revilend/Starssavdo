@@ -80,7 +80,7 @@ async def _get_bot_username(bot: Any) -> str:
 
 
 @router.message(StateFilter("*"), ButtonText("menu_refer"))
-@router.message(StateFilter("*"), F.text.contains("taklif qilish"))
+@router.message(StateFilter("*"), F.text.contains("taklif"))
 async def referral_menu(
     message: Message, state: FSMContext | None = None
 ) -> None:

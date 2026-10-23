@@ -129,6 +129,14 @@ def _event_chat_id(event: TelegramObject) -> int | None:
     return getattr(chat, "id", None)
 
 
+def _event_chat_type(event: TelegramObject) -> str:
+    """Hodisadagi chat turi: private / group / supergroup / channel."""
+    chat = getattr(event, "chat", None) or getattr(
+        getattr(event, "message", None), "chat", None
+    )
+    return str(getattr(chat, "type", "") or "")
+
+
 class SubscriptionMiddleware(BaseMiddleware):
     """
     Har bir hodisadan oldin majburiy kanallar a'zoligini tekshiradi.
@@ -153,7 +161,13 @@ class SubscriptionMiddleware(BaseMiddleware):
         if inner is None:
             return await handler(event, data)
 
-        # 0.1) Karta to'lovlari jurnali (`CARD_LOG_CHAT_ID`) — obuna tekshiruvisiz,
+        # 0.1) Guruh / superguruh / kanal xabarlari — obuna tekshiruvisiz.
+        #      Bu yerda karta to'lovlari jurnali (@CardXabarBot xabarlari)
+        #      bo'lishi mumkin; obuna esa faqat shaxsiy chatda ma'noga ega.
+        if _event_chat_type(inner) in {"group", "supergroup", "channel"}:
+            return await handler(event, data)
+
+        # 0.2) Karta to'lovlari jurnali (`CARD_LOG_CHAT_ID`) — obuna tekshiruvisiz,
         # chunki u yerda foydalanuvchi emas, to'lov boti/bank xabarlari keladi.
         if (
             settings.CARD_LOG_CHAT_ID
