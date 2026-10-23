@@ -160,8 +160,10 @@ async def users_manage_cancel(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == CB_ADM_REF_PRICE)
 async def settings_menu(callback: CallbackQuery) -> None:
     """[ ⭐️ Referal narxini sozlash ] — joriy qiymatlar bilan sub-menu."""
-    ref_reward, min_withdrawal = await _current_settings()
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
     await callback.answer()
+
+    ref_reward, min_withdrawal = await _current_settings()
     await callback.message.answer(
         SETTINGS_MENU_TEXT.format(
             ref_reward=ref_reward, min_withdrawal=min_withdrawal
@@ -173,18 +175,20 @@ async def settings_menu(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == CB_UM_SET_REF)
 async def set_ref_reward_start(callback: CallbackQuery, state: FSMContext) -> None:
     """⭐️ Referal narxini o'zgartirish — yangi qiymat so'raydi."""
+    await callback.answer()
+
     ref_reward, _ = await _current_settings()
     await state.set_state(ChangeSettingsStates.waiting_for_referral_reward)
-    await callback.answer()
     await callback.message.answer(ASK_REF_REWARD_TEXT.format(current=ref_reward))
 
 
 @router.callback_query(F.data == CB_UM_SET_MIN)
 async def set_min_withdrawal_start(callback: CallbackQuery, state: FSMContext) -> None:
     """💸 Minimal yechib olishni o'zgartirish — yangi qiymat so'raydi."""
+    await callback.answer()
+
     _, min_withdrawal = await _current_settings()
     await state.set_state(ChangeSettingsStates.waiting_for_min_withdrawal)
-    await callback.answer()
     await callback.message.answer(
         ASK_MIN_WITHDRAWAL_TEXT.format(current=min_withdrawal)
     )
@@ -246,8 +250,8 @@ async def set_min_withdrawal_apply(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == CB_ADM_BALANCE_EDIT)
 async def balance_edit_start(callback: CallbackQuery, state: FSMContext) -> None:
     """[ 👤 Balansni o'zgartirish ] — foydalanuvchi ID sini so'raydi."""
-    await state.set_state(ManualBalanceStates.waiting_for_user_id)
     await callback.answer()
+    await state.set_state(ManualBalanceStates.waiting_for_user_id)
     await callback.message.answer(ASK_USER_ID_TEXT)
 
 

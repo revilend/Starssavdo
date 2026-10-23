@@ -7,10 +7,14 @@ Qoidalari:
  1. Admin (`settings.ADMIN_IDS`) — tekshiruvsiz o'tadi.
  2. `check_subscription` callback'i — bloklanmaydi (aynan shu tugma
     qayta tekshiruv uchun ishlatiladi).
- 3. Boshqa barcha xabar/callbacklar: foydalanuvchi kanallarga a'zo emas
+ 3. TASDIQLANGAN foydalanuvchi (xotiradagi kesh YOKI bazada
+    `channels_verified = True`) hech qanday tekshiruvsiz darhol
+    o'tkaziladi — har bir tugma bosilishida Telegram API ham, baza ham
+    so'ralmaydi (tezlik uchun asosiy optimizatsiya).
+ 4. Boshqa barcha xabar/callbacklar: foydalanuvchi kanallarga a'zo emas
     bo'lsa hodisa TO'XTATILADI (`return None`) va unga ogohlantirish +
     kanallar ro'yxati + "✅ A'zo bo'ldim" tugmasi yuboriladi.
- 4. Faol kanallar ro'yxati servis tomonidan qisqa muddat keshlanadi,
+ 5. Faol kanallar ro'yxati servis tomonidan qisqa muddat keshlanadi,
     a'zolik holati esa 120 soniya keshlanadi — Telegram API limiti
     (TooManyRequests) xavfi yo'q.
 
@@ -29,8 +33,10 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, TelegramObject
+from cachetools import TTLCache
 
 from config.settings import settings
+from database.queries import UserRepository
 from keyboards.inline import CB_CHECK_SUBSCRIPTION, get_subscription_kb
 from services.channel_checker import (
     check_user_subscription,
@@ -38,6 +44,35 @@ from services.channel_checker import (
 )
 
 logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------------
+# Tasdiqlangan foydalanuvchilar keshi
+# - Bir marta kanallarga a'zo bo'lgan foydalanuvchi IDsi shu yerga yoziladi.
+# - Keyingi yangilanishlarda middleware na Telegram API'ga, na bazaga
+#   murojaat qiladi — faqat dict tekshiruvi (~mikrosekund).
+# - TTL 1 soat: uzoq tanaffusdan keyin holat qayta tekshiriladi
+#   (foydalanuvchi kanallardan chiqib ketgan bo'lishi mumkin).
+# -------------------------------------------------------------
+VERIFIED_CACHE_TTL = 3600          # soniya
+VERIFIED_CACHE_MAXSIZE = 50_000    # ta foydalanuvchi
+_verified_cache: TTLCache = TTLCache(
+    maxsize=VERIFIED_CACHE_MAXSIZE, ttl=VERIFIED_CACHE_TTL
+)
+
+
+def invalidate_verified_cache(user_id: int | None = None) -> None:
+    """
+    Tasdiqlangan foydalanuvchilar keshini tozalaydi.
+
+    Args:
+        user_id: berilsa — faqat shu foydalanuvchi, aks holda butun kesh.
+    """
+    if user_id is None:
+        _verified_cache.clear()
+        logger.info("Tasdiqlangan foydalanuvchilar keshi tozalandi")
+        return
+    _verified_cache.pop(user_id, None)
+
 
 # Ogohlantirish matni (HTML parse_mode bilan yuboriladi)
 SUBSCRIPTION_PROMPT_TEXT = (
@@ -74,22 +109,57 @@ class SubscriptionMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery) and event.data == CB_CHECK_SUBSCRIPTION:
             return await handler(event, data)
 
-        # 4) Faol kanallar ro'yxati (keshli, 60 soniya)
+        # 4) XOTIRA KESHI — bir marta tasdiqlangan foydalanuvchi.
+        #    Eng tez yo'l: DB so'rovi ham, Telegram API ham YO'Q.
+        if user.id in _verified_cache:
+            return await handler(event, data)
+
+        # 5) Faol kanallar ro'yxati (keshli, 60 soniya)
         channels = await get_active_channel_dicts()
         if not channels:
             # Majburiy kanallar o'rnatilmagan — erkin foydalanish
+            return await handler(event, data)
+
+        # 6) BAZA BELGISI — `channels_verified = True`.
+        #    Bir marta "✅ A'zo bo'ldim" bosilgach, har bir tugma bosilishida
+        #    qayta API so'rovi yuborilmaydi.
+        if await self._is_verified(user.id):
             return await handler(event, data)
 
         bot: Bot = data["bot"]
         is_subscribed, unjoined = await check_user_subscription(bot, user.id, channels)
 
         if is_subscribed:
+            # Keyingi yangilanishlar uchun keshlaymiz (DB/API'siz o'tadi)
+            _verified_cache[user.id] = True
             return await handler(event, data)
 
-        # 5) A'zo emas — hodisani to'xtatamiz va yo'naltiruvchi yuboramiz
+        # 7) A'zo emas — hodisani to'xtatamiz va yo'naltiruvchi yuboramiz
         logger.debug("user=%s obuna tekshiruvidan o'tmadi", user.id)
         await self._send_subscription_prompt(event, bot, unjoined)
         return None
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def _is_verified(user_id: int) -> bool:
+        """
+        Bazadagi `channels_verified` belgisini tekshiradi (xotira keshi bilan).
+
+        Baza vaqtincha ishlamasa ham bot to'xtab qolmasligi uchun xatolik
+        loglanadi va `False` qaytadi (keyin odatdagi Telegram tekshiruvi
+        bajariladi).
+        """
+        try:
+            verified = await UserRepository.is_channels_verified(user_id)
+        except Exception:  # noqa: BLE001 — DB xatosi bot ishini to'xtatmasin
+            logger.exception(
+                "channels_verified tekshirib bo'lmadi (user=%s)", user_id
+            )
+            return False
+
+        if verified:
+            _verified_cache[user_id] = True
+        return verified
 
     # ------------------------------------------------------------------
     @staticmethod

@@ -110,6 +110,9 @@ async def withdraw_start(callback: CallbackQuery, state: FSMContext) -> None:
     user = callback.from_user
     user_id = user.id
 
+    # Spinner DARHOL yopiladi — DB so'rovlari tugmani kutdirmaydi
+    await callback.answer()
+
     # Minimal miqdor (bazadan)
     min_withdrawal = await _get_min_withdrawal()
 
@@ -120,9 +123,8 @@ async def withdraw_start(callback: CallbackQuery, state: FSMContext) -> None:
     balance = db_user.stars_balance if db_user else 0
 
     if balance < min_withdrawal:
-        await callback.answer(
-            f"Balans yetarli emas — kamida {min_withdrawal}⭐️ kerak",
-            show_alert=True,
+        await callback.message.answer(
+            f"⚠️ Balans yetarli emas — kamida {min_withdrawal}⭐️ kerak"
         )
         return
 
@@ -135,7 +137,6 @@ async def withdraw_start(callback: CallbackQuery, state: FSMContext) -> None:
         parse_mode="HTML",
         reply_markup=_cancel_kb(),
     )
-    await callback.answer()
 
 
 # =============================================================

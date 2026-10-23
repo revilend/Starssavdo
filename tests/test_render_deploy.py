@@ -7,7 +7,9 @@ Render deploy qismini tekshiradi:
  2. Port aniqlash (`PORT` environment variable -> Render).
  3. Supabase/Render uchun DATABASE_URL konfiguratsiyasi:
       - `sslmode=require` -> asyncpg'ning `ssl="require"` argumentiga;
-      - Transaction Pooler (port 6543) -> `statement_cache_size=0`;
+      - Transaction Pooler (port 6543 / pooler host) -> `statement_cache_size=0`
+        VA `prepared_statement_cache_size=0` (ikki kesh ham o'chadi);
+      - Pooler'da pool hajmi 2 + 13 = 15 (direct'da 10 + 20 = 30);
       - Supabase hostida TLS avtomatik yoqiladi.
 
 Ishga tushirish (repo root'dan):
@@ -34,7 +36,11 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 import main as app_main  # noqa: E402
 from config.settings import settings  # noqa: E402
-from database.connection import _build_database_config  # noqa: E402
+from database.connection import (  # noqa: E402
+    _build_database_config,
+    _is_pooler,
+    _pool_settings,
+)
 
 
 def _free_port() -> int:
@@ -141,13 +147,44 @@ def test_database_config_converts_sslmode() -> None:
 
 
 def test_database_config_pooler_disables_statement_cache() -> None:
-    """Transaction Pooler (6543) uchun statement cache o'chiriladi."""
+    """Transaction Pooler (6543) uchun IKKI statement cache ham o'chiriladi."""
     url, args = _build_database_config(
         "postgresql://postgres.ref:pass@aws-0-eu-central-1.pooler.supabase.com"
         ":6543/postgres"
     )
     assert args["statement_cache_size"] == 0
+    assert args["prepared_statement_cache_size"] == 0
     assert args["ssl"] == "require"
+
+
+def test_database_config_pooler_host_detected_without_port() -> None:
+    """Port ko'rsatilmasa ham pooler host bo'yicha aniqlanadi."""
+    url, args = _build_database_config(
+        "postgresql://postgres.ref:pass@aws-0-eu-central-1.pooler.supabase.com"
+        "/postgres"
+    )
+    assert args["statement_cache_size"] == 0
+    assert args["prepared_statement_cache_size"] == 0
+
+
+def test_is_pooler() -> None:
+    """Pooler aniqlash qoidalari."""
+    assert _is_pooler("aws-0-eu-central-1.pooler.supabase.com", 6543)
+    assert _is_pooler("aws-0-eu-central-1.pooler.supabase.com", 5432)
+    assert _is_pooler("db.example.com", 6543)
+    assert not _is_pooler("db.abcdefgh.supabase.co", 5432)
+    assert not _is_pooler(None, 5432)
+
+
+def test_pool_settings() -> None:
+    """Pooler'da pool cheklanadi (2 + 13 = 15), direct'da 10 + 20 = 30."""
+    assert _pool_settings(
+        "postgresql://postgres.ref:pass@aws-0-eu-central-1.pooler.supabase.com"
+        ":6543/postgres"
+    ) == {"pool_size": 2, "max_overflow": 13}
+    assert _pool_settings(
+        "postgresql://postgres.ref:pass@db.abcdefgh.supabase.co:5432/postgres"
+    ) == {"pool_size": 10, "max_overflow": 20}
 
 
 def test_database_config_supabase_direct_requires_ssl() -> None:
@@ -216,3 +253,6 @@ def test_connect_args_reach_asyncpg_safely(monkeypatch) -> None:
     assert "sslmode" not in captured, "asyncpg 'sslmode' kwarg'ini qabul qilmaydi!"
     assert captured.get("ssl") == "require"
     assert captured.get("statement_cache_size") == 0
+    # `prepared_statement_cache_size` SQLAlchemy DBAPI qatlamida "yutiladi"
+    # (asyncpg.connect ga uzatilsa TypeError bo'lardi)
+    assert "prepared_statement_cache_size" not in captured

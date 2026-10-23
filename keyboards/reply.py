@@ -5,7 +5,8 @@ Asosiy doimiy (reply) menyu — bot bilan suhbatning bosh ekrani.
 
 Xususiyatlar:
  - `resize_keyboard=True`  — tugmalar ekran kengligiga moslanadi.
- - `is_persistent=True`    — menyu har doim (hatto /start dan keyin ham) ko'rinadi.
+ - `is_persistent=False`   — menyu yig'iladigan (collapsible) bo'ladi, ya'ni
+   Telegram xabar yozish qatorida ⊞ (yig'ish/ochish) tugmasi ko'rinadi.
  - Har bir tugma matni (BTN_*) konstant sifatida export qilinadi —
    handler'larda `message.text == BTN_SHOP` deb tekshirish qulay bo'ladi.
 
@@ -50,7 +51,8 @@ def get_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
         is_admin: True — foydalanuvchi ADMIN_IDS da bo'lsa, qo'shimcha
                   "⚙️ Admin Panel" qatori qo'shiladi.
 
-    Returns: resize_keyboard=True, is_persistent=True bilan reply keyboard.
+    Returns: resize_keyboard=True, is_persistent=False bilan reply keyboard
+             (foydalanuvchi menyuni ⊞ tugmasi orqali yig'ib/ochib qo'yishi mumkin).
     """
     builder = ReplyKeyboardBuilder()
 
@@ -73,5 +75,5 @@ def get_main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
     return builder.as_markup(
         resize_keyboard=True,   # tugmalar kichraytiriladi (zamonaviy ko'rinish)
-        is_persistent=True,     # menyu doimiy — qayta yuborilmaydi ham ko'rinadi
+        is_persistent=False,    # menyu yig'iladigan — ⊞ tugmasi orqali ochish/yig'ish
     )

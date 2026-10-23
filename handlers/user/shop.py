@@ -16,7 +16,11 @@ Oqimlar:
     adminga darhol xabarnoma yuboradi.
  5. `pay_balance_{product_id}` — bot balansi tekshiriladi, yetarli bo'lsa
     atomik xarid (balans - , transactions audit, buyurtma paid),
-    yetarli emasda alert.
+    yetarli emasda xabar.
+ 6. "🎁 Mayda Giftlar" reply tugmasi — matn emoji bilan yoki emojisiz
+    kelsa ham gift kategoriyasi ochiladi (`is_gift_menu` filtri).
+ 7. Navigatsiya: `shop_categories` (toifalarga qaytish) va
+    `back_to_menu` (bosh menyu) callback'lari shu routerda.
 
 Xavfsizlik:
  - Payload "order:{id}:{user_id}" — pre_checkout'da egasi tekshiriladi
@@ -33,7 +37,7 @@ import html
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 
 from config.settings import settings
@@ -49,14 +53,16 @@ from database.queries import (
     UserRepository,
 )
 from keyboards.inline import (
+    CB_BACK_TO_MENU,
     CB_PAY_BALANCE_PREFIX,
     CB_PAY_XTR_PREFIX,
+    CB_SHOP_CATEGORIES,
     CATEGORY_EMOJI,
     get_payment_methods_kb,
     get_products_list_kb,
     get_shop_categories_kb,
 )
-from keyboards.reply import BTN_SHOP
+from keyboards.reply import BTN_SHOP, get_main_menu_kb
 from services.payments import (
     build_order_payload,
     parse_order_payload,
@@ -139,6 +145,17 @@ ALERT_CATEGORY_NOT_FOUND = "❌ Toifa topilmadi!"
 ALERT_INVOICE_FAILED = "❌ Invoysni yuborib bo'lmadi! Keyinroq urinib ko'ring."
 ALERT_PURCHASE_FAILED = "❌ Xaridni amalga oshirib bo'lmadi! Keyinroq urinib ko'ring."
 
+# "Mayda Giftlar" reply tugmasini moslashuvchan aniqlash uchun kalit so'zlar.
+# Tugma matni emoji bilan ("🎁 Mayda Giftlar") yoki emojisiz ("Mayda Giftlar"),
+# hatto kichik harflarda kelsa ham ishlaydi.
+GIFT_KEYWORDS: tuple[str, ...] = ("gift", "sovg'a", "sovga", "mayda")
+
+
+def is_gift_menu(message: Message) -> bool:
+    """Xabar matni gift bo'limiga tegishlimi (emoji va registrga bog'liq emas)."""
+    text = (message.text or "").lower()
+    return any(keyword in text for keyword in GIFT_KEYWORDS)
+
 
 # =============================================================
 # Yordamchilar
@@ -154,6 +171,56 @@ def _parse_product_id(data: str, prefix: str) -> int | None:
         return None
     product_id = int(raw)
     return product_id if product_id > 0 else None
+
+
+def _category_title(category: str) -> str:
+    """Toifa sarlavhasi (HTML) — noma'lum toifa uchun emoji/standart matn."""
+    return CATEGORY_TITLES.get(category, CATEGORY_EMOJI.get(category, "🛍"))
+
+
+def _category_text(category: str, products) -> str:
+    """Tanlangan toifa mahsulotlari ro'yxati (HTML matn)."""
+    lines: list[str] = []
+    for index, product in enumerate(products, start=1):
+        desc_html = ""
+        if product.description:
+            desc_html = f"\n   <i>{html.escape(product.description)}</i>"
+        lines.append(
+            f"{index}. <b>{html.escape(product.title)}</b> — "
+            f"<b>{product.price_xtr} XTR</b>{desc_html}"
+        )
+    return (
+        f"{_category_title(category)}\n\n" + "\n".join(lines) +
+        "\n\nXarid qilish uchun tugmani bosing 👇"
+    )
+
+
+async def _edit_or_send(
+    callback: CallbackQuery, text: str, reply_markup=None
+) -> None:
+    """
+    Joriy inline xabarni `text` bilan almashtiradi.
+
+    Xabar eski/o'chirilgan bo'lsa (tahrirlab bo'lmaydi yoki InaccessibleMessage)
+    — chatga yangi xabar yuboriladi: foydalanuvchi baribir javob oladi.
+    """
+    message = callback.message
+    edit = getattr(message, "edit_text", None)
+    if edit is not None:
+        try:
+            await edit(text, parse_mode="HTML", reply_markup=reply_markup)
+            return
+        except TelegramBadRequest:
+            pass
+
+    chat_id = callback.from_user.id
+    chat = getattr(message, "chat", None)
+    if chat is not None and getattr(chat, "id", None):
+        chat_id = chat.id
+
+    await callback.bot.send_message(
+        chat_id, text, parse_mode="HTML", reply_markup=reply_markup
+    )
 
 
 async def _notify_admins(
@@ -193,6 +260,33 @@ async def shop_menu(message: Message) -> None:
     logger.info("Do'kon ochildi: user=%s", message.from_user.id)
 
 
+@router.message(is_gift_menu)
+async def open_gifts(message: Message) -> None:
+    """
+    🎁 Mayda Giftlar — reply menyu tugmasi.
+
+    Tugma matni emoji bilan ("🎁 Mayda Giftlar") yoki emojisiz
+    ("Mayda Giftlar", "mayda sovg'alar") kelsa ham gift kategoriyasi
+    ochiladi (`is_gift_menu` filtri).
+    """
+    products = await ProductRepository.get_products_by_category("gift")
+
+    if not products:
+        await message.answer(
+            EMPTY_CATEGORY_TEXT.format(category_title=_category_title("gift")),
+            parse_mode="HTML",
+            reply_markup=get_shop_categories_kb(),
+        )
+        return
+
+    await message.answer(
+        _category_text("gift", products),
+        parse_mode="HTML",
+        reply_markup=get_products_list_kb(products, "gift"),
+    )
+    logger.info("Gift bo'limi ochildi: user=%s", message.from_user.id)
+
+
 # =============================================================
 # 2. TOIFA — MAHSULOTLAR RO'YXATI
 # =============================================================
@@ -204,32 +298,21 @@ async def shop_category(callback: CallbackQuery) -> None:
         await callback.answer(ALERT_CATEGORY_NOT_FOUND, show_alert=True)
         return
 
+    # Spinner DARHOL yopiladi — DB so'rovi tugmasini kutdirmaydi
+    await callback.answer()
+
     products = await ProductRepository.get_products_by_category(category)
-    category_title = CATEGORY_TITLES.get(category, CATEGORY_EMOJI.get(category, "🛍"))
 
     if not products:
-        await callback.answer()
         await callback.message.answer(
-            EMPTY_CATEGORY_TEXT.format(category_title=category_title),
+            EMPTY_CATEGORY_TEXT.format(category_title=_category_title(category)),
             parse_mode="HTML",
             reply_markup=get_shop_categories_kb(),
         )
         return
 
-    lines: list[str] = []
-    for index, product in enumerate(products, start=1):
-        desc_html = ""
-        if product.description:
-            desc_html = f"\n   <i>{html.escape(product.description)}</i>"
-        lines.append(
-            f"{index}. <b>{html.escape(product.title)}</b> — "
-            f"<b>{product.price_xtr} XTR</b>{desc_html}"
-        )
-
-    await callback.answer()
     await callback.message.answer(
-        f"{category_title}\n\n" + "\n".join(lines) +
-        "\n\nXarid qilish uchun tugmani bosing 👇",
+        _category_text(category, products),
         parse_mode="HTML",
         reply_markup=get_products_list_kb(products, category),
     )
@@ -250,13 +333,15 @@ async def buy_product(callback: CallbackQuery) -> None:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
         return
 
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
+    await callback.answer()
+
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     emoji = CATEGORY_EMOJI.get(product.category, "🛍")
-    await callback.answer()
     await callback.message.answer(
         PRODUCT_DETAIL_TEXT.format(
             emoji=emoji,
@@ -282,9 +367,12 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
         return
 
+    # Spinner DARHOL yopiladi — ortdagi DB/Telegram API so'rovlari kutdirilmaydi
+    await callback.answer()
+
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     user_id = callback.from_user.id
@@ -305,7 +393,7 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
         logger.exception(
             "Buyurtma yaratilmadi: user=%s product=%s", user_id, product.id
         )
-        await callback.answer(ALERT_PURCHASE_FAILED, show_alert=True)
+        await callback.message.answer(ALERT_PURCHASE_FAILED)
         return
 
     # Invoys yuboriladi (Telegram Stars balansi bilan to'lov)
@@ -322,10 +410,9 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
         logger.exception(
             "Invoys yuborilmadi: user=%s order=%s", user_id, order.id
         )
-        await callback.answer(ALERT_INVOICE_FAILED, show_alert=True)
+        await callback.message.answer(ALERT_INVOICE_FAILED)
         return
 
-    await callback.answer("⭐️ To'lov sahifasi yuborildi ✅")
     logger.info(
         "XTR invoys yuborildi: user=%s order=%s product=%s amount=%s",
         user_id, order.id, product.id, product.price_xtr,
@@ -453,9 +540,12 @@ async def pay_with_balance(callback: CallbackQuery) -> None:
         await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
         return
 
+    # Spinner DARHOL yopiladi (DB so'rovlaridan oldin)
+    await callback.answer()
+
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     user_id = callback.from_user.id
@@ -463,14 +553,13 @@ async def pay_with_balance(callback: CallbackQuery) -> None:
     # Do'stlar orqali to'plangan balans tekshiriladi
     user = await UserRepository.get_user(user_id)
     if user is None:
-        await callback.answer(
-            "❌ Profilingiz topilmadi! /start buyrug'ini bosing.",
-            show_alert=True,
+        await callback.message.answer(
+            "❌ Profilingiz topilmadi! /start buyrug'ini bosing."
         )
         return
 
     if user.stars_balance < product.price_xtr:
-        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
+        await callback.message.answer(ALERT_NOT_ENOUGH_BALANCE)
         return
 
     # Atomik xarid (balans - , audit, order=pending -> paid)
@@ -478,18 +567,17 @@ async def pay_with_balance(callback: CallbackQuery) -> None:
         order = await OrderRepository.create_balance_order(user_id, product.id)
     except InsufficientBalanceError:
         # Parallel sarf — balans shu oraliqda kamaygan bo'lishi mumkin
-        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
+        await callback.message.answer(ALERT_NOT_ENOUGH_BALANCE)
         return
     except RepositoryError:
         logger.exception(
             "Balans xaridi amalga oshmadi: user=%s product=%s",
             user_id, product.id,
         )
-        await callback.answer(ALERT_PURCHASE_FAILED, show_alert=True)
+        await callback.message.answer(ALERT_PURCHASE_FAILED)
         return
 
     new_balance = user.stars_balance - product.price_xtr
-    await callback.answer("✅ Xarid muvaffaqiyatli!")
     await callback.message.answer(
         BALANCE_RECEIPT_TEXT.format(
             order_id=order.id,
@@ -502,4 +590,27 @@ async def pay_with_balance(callback: CallbackQuery) -> None:
     logger.info(
         "Balans orqali xarid: user=%s order=%s product=%s -%sXTR",
         user_id, order.id, product.id, product.price_xtr,
+    )
+
+
+# =============================================================
+# 6. NAVIGATSIYA — toifalarga qaytish / bosh menyu
+# =============================================================
+@router.callback_query(F.data == CB_SHOP_CATEGORIES)
+async def back_to_categories(callback: CallbackQuery) -> None:
+    """[ ◀️ Toifalarga qaytish / Orqaga ] — toifalar menyusini qaytaradi."""
+    await callback.answer()
+    await _edit_or_send(
+        callback, SHOP_WELCOME_TEXT, get_shop_categories_kb()
+    )
+
+
+@router.callback_query(F.data == CB_BACK_TO_MENU)
+async def back_to_main_menu(callback: CallbackQuery) -> None:
+    """[ ◀️ Bosh menyu ] — inline xabarni almashtirib, asosiy reply menyuni beradi."""
+    await callback.answer()
+    await _edit_or_send(
+        callback,
+        "🏠 Bosh menyu.",
+        get_main_menu_kb(is_admin=callback.from_user.id in settings.ADMIN_IDS),
     )

@@ -53,7 +53,7 @@ def main() -> None:
     kb = get_main_menu_kb()
     ok("ReplyKeyboardMarkup", isinstance(kb, ReplyKeyboardMarkup))
     ok("resize_keyboard=True", kb.resize_keyboard is True)
-    ok("is_persistent=True", kb.is_persistent is True)
+    ok("is_persistent=False (collapsible)", kb.is_persistent is False)
     r = rows(kb)
     ok("foydalanuvchi: 3 qator", len(r) == 3, str(len(r)))
     ok("1-qator: Do'kon + Balansim", r[0][0].text == BTN_SHOP and r[0][1].text == "⭐️ Balansim")
@@ -66,7 +66,8 @@ def main() -> None:
     kba = get_main_menu_kb(is_admin=True)
     ra = rows(kba)
     ok("admin: 4-qator Admin Panel", len(ra) == 4 and ra[3][0].text == BTN_ADMIN)
-    ok("admin ham persistent/resize", kba.is_persistent and kba.resize_keyboard)
+    ok("admin ham collapsible/resize",
+       kba.is_persistent is False and kba.resize_keyboard is True)
 
     print("== inline: obuna ==")
     class Ch:

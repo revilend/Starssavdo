@@ -107,6 +107,10 @@ async def main() -> None:
     ok("set_channels_verified", await UserRepository.set_channels_verified(1001))
     ok("set_channels_verified (yo'q user)", not await UserRepository.set_channels_verified(9999))
     ok("channels_verified=True", (await UserRepository.get_user(1001)).channels_verified)
+    ok("is_channels_verified=True (middleware uchun)",
+       await UserRepository.is_channels_verified(1001))
+    ok("is_channels_verified: yo'q user -> False",
+       not await UserRepository.is_channels_verified(9999))
 
     print("== 2. ChannelRepository ==")
     c1 = await ChannelRepository.add_channel(-1001, "Kanal1", "https://t.me/+aaa", "kanal1")
