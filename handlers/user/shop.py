@@ -139,10 +139,6 @@ ADMIN_BUY_ALERT_TEXT = (
 
 # Xatolik alertlari
 ALERT_PRODUCT_NOT_FOUND = "❌ Mahsulot topilmadi!"
-ALERT_NOT_ENOUGH_BALANCE = (
-    "❌ Balansingizda Stars yetarli emas! "
-    "Do'stlaringizni taklif qilib Stars to'plang."
-)
 ALERT_CATEGORY_NOT_FOUND = "❌ Toifa topilmadi!"
 ALERT_INVOICE_FAILED = "❌ Invoysni yuborib bo'lmadi! Keyinroq urinib ko'ring."
 ALERT_PURCHASE_FAILED = "❌ Xaridni amalga oshirib bo'lmadi! Keyinroq urinib ko'ring."
@@ -151,14 +147,13 @@ ALERT_PURCHASE_FAILED = "❌ Xaridni amalga oshirib bo'lmadi! Keyinroq urinib ko
 # `is_gift_text()` matnni lower() qilib tekshiradi — emoji va registr muhim emas.
 GIFT_KEYWORDS: tuple[str, ...] = ("gift", "sovg'a", "sovga", "mayda")
 
-# Balans yetarli bo'lmaganda yuboriladigan xabar (pastda to'ldirish tugmasi)
+# Balans yetarli bo'lmaganda yuboriladigan xabar (tagida [💳 Balans to'ldirish]
+# inline tugmasi — callback: deposit_start).
 NOT_ENOUGH_BALANCE_TEXT = (
-    "❌ <b>Balansingizda Stars yetarli emas!</b>\n\n"
-    "├ Mahsulot narxi: <b>{price} ⭐️</b>\n"
-    "├ Joriy balans: <b>{balance} ⭐️</b>\n"
-    "└ Yetishmayapti: <b>{missing} ⭐️</b>\n\n"
-    "Avval «💳 Balans to'ldirish» bo'limidan hisobingizni to'ldiring — "
-    "to'lov avtomatik tasdiqlanadi."
+    "❌ Balansingizda mablag' yetarli emas!\n"
+    "Sizning balansingiz: {stars_balance} ⭐️\n"
+    "Ushbu mahsulot narxi: {price_stars} ⭐️ ({price_uzs:,} so'm)\n\n"
+    "Iltimos, xarid qilish uchun avval hisobingizni to'ldiring."
 )
 
 
@@ -176,6 +171,19 @@ def _parse_product_id(data: str, prefix: str) -> int | None:
         return None
     product_id = int(raw)
     return product_id if product_id > 0 else None
+
+
+def _price_uzs_of(product: Any) -> int:
+    """
+    Mahsulotning so'mdagi narxi (ko'rsatish uchun).
+
+    UZS katalogida `price_uzs` to'g'ridan-to'g'ri olinadi; faqat Stars
+    narxi bilan qo'shilgan mahsulot uchun `SOM_PER_STAR` orqali hisoblanadi.
+    """
+    price_uzs = int(getattr(product, "price_uzs", 0) or 0)
+    if price_uzs > 0:
+        return price_uzs
+    return int(product.price_xtr) * int(settings.SOM_PER_STAR)
 
 
 async def _notify_admins(
@@ -656,13 +664,14 @@ async def _purchase_with_balance(
         return
 
     if user.stars_balance < product.price_xtr:
+        # Balans yetarli emas — bu xato emas: aniq ko'rsatma + bir bosishda
+        # to'lov oynasiga o'tkazuvchi [💳 Balans to'ldirish] tugmasi.
         await callback.message.answer(
             NOT_ENOUGH_BALANCE_TEXT.format(
-                price=product.price_xtr,
-                balance=user.stars_balance,
-                missing=product.price_xtr - user.stars_balance,
+                stars_balance=user.stars_balance,
+                price_stars=product.price_xtr,
+                price_uzs=_price_uzs_of(product),
             ),
-            parse_mode="HTML",
             reply_markup=get_topup_needed_kb(),
         )
         return
@@ -674,11 +683,10 @@ async def _purchase_with_balance(
         # Parallel sarf — balans shu oraliqda kamaygan bo'lishi mumkin
         await callback.message.answer(
             NOT_ENOUGH_BALANCE_TEXT.format(
-                price=product.price_xtr,
-                balance=0,
-                missing=product.price_xtr,
+                stars_balance=0,
+                price_stars=product.price_xtr,
+                price_uzs=_price_uzs_of(product),
             ),
-            parse_mode="HTML",
             reply_markup=get_topup_needed_kb(),
         )
         return

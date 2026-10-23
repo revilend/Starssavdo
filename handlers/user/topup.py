@@ -60,6 +60,7 @@ from database.queries import (
     UserRepository,
 )
 from keyboards.inline import (
+    CB_DEPOSIT_START,
     CB_TOPUP_AUTO,
     CB_TOPUP_CANCEL,
     CB_TOPUP_CARD,
@@ -230,6 +231,18 @@ async def topup_start_message(
 
 @router.callback_query(F.data == CB_TOPUP_START)
 async def topup_start_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.clear()
+    await _begin_topup(callback.message, state)
+
+
+@router.callback_query(StateFilter("*"), F.data == CB_DEPOSIT_START)
+async def deposit_start_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """
+    `deposit_start` — do'konda "Balans yetarli emas" xabari ostidagi
+    [💳 Balans to'ldirish] tugmasi. Xuddi `topup_start` kabi to'lov
+    oynasini ochadi, FSM holatidan qat'i nazar.
+    """
     await callback.answer()
     await state.clear()
     await _begin_topup(callback.message, state)

@@ -42,6 +42,9 @@ CB_SHOP_CATEGORIES = "shop_categories"
 CB_TOP_REFERRERS = "top_referrers"
 CB_WITHDRAW_START = "withdraw_start"
 CB_TOPUP_START = "topup_start"
+# Xarid oqtidagi "Balans yetarli emas" tugmasi — to'lov oynasiga to'g'ridan-to'g'ri
+# yo'naltiruvchi alohida callback (topup_start bilan bir xil oynani ochadi)
+CB_DEPOSIT_START = "deposit_start"
 CB_TOPUP_CANCEL = "topup_cancel"
 CB_TOPUP_AUTO = "topup_auto"
 CB_TOPUP_CARD = "topup_card"
@@ -204,7 +207,7 @@ def get_payment_methods_kb(product_id: int) -> InlineKeyboardMarkup:
 def get_topup_needed_kb() -> InlineKeyboardMarkup:
     """Balans yetarli bo'lmaganda: [💳 Balans to'ldirish] + orqaga."""
     builder = InlineKeyboardBuilder()
-    builder.row(build_inline_button("topup", callback_data=CB_TOPUP_START))
+    builder.row(build_inline_button("topup", callback_data=CB_DEPOSIT_START))
     builder.row(
         build_inline_button("shop_back", callback_data=CB_SHOP_CATEGORIES)
     )

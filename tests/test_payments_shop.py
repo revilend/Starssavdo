@@ -599,18 +599,20 @@ def test_pay_balance():
     async def poor_case():
         cb = FakeCallback(tg_user(555), "pay_balance_1")
         await shop_mod.pay_with_balance(cb)
-        ok("yetarli emas -> hisob-kitob xabari",
+        text = cb.message.answers[-1]["text"]
+        ok("yetarli emas -> chiroyli xabar",
            answered_first(cb)
-           and "Balansingizda Stars yetarli emas" in cb.message.answers[-1]["text"]
-           and "Yetishmayapti: <b>70 ⭐️</b>" in cb.message.answers[-1]["text"],
-           str(cb.message.answers))
+           and "Balansingizda mablag' yetarli emas!" in text
+           and "Sizning balansingiz: 30 ⭐️" in text,
+           text)
+        ok("narx: stars + so'm ko'rsatiladi",
+           "Ushbu mahsulot narxi: 100 ⭐️ (" in text and "so'm)" in text, text)
         ok("xarid chaqirilmadi", env2.state.balance_order_calls == [])
-        ok("to'ldirish tugmasi yuborildi",
+        ok("[💳 Balans to'ldirish] tugmasi: deposit_start",
            len(cb.message.answers) == 1
-           and "Balansingizda Stars yetarli emas" in cb.message.answers[0]["text"]
-           and "topup_start" in kb_callbacks(
+           and "deposit_start" in kb_callbacks(
                cb.message.answers[0]["reply_markup"]
-           ))
+           ), str(kb_callbacks(cb.message.answers[0]["reply_markup"])))
 
     run(poor_case())
     env2.restore()
@@ -624,7 +626,7 @@ def test_pay_balance():
         await shop_mod.pay_with_balance(cb)
         ok("race InsufficientBalanceError -> xabar",
            answered_first(cb)
-           and "Balansingizda Stars yetarli emas" in cb.message.answers[-1]["text"])
+           and "Balansingizda mablag' yetarli emas!" in cb.message.answers[-1]["text"])
 
     run(race_case())
     env3.restore()
@@ -669,6 +671,38 @@ def test_pay_balance():
     env6.restore()
 
 
+def test_deposit_start_alias():
+    print("== J. deposit_start (to'ldirish alias tugmasi) ==")
+    import handlers.user.topup as topup_mod
+
+    calls: list = []
+
+    async def fake_begin(target, state):
+        calls.append(target)
+
+    class FakeState:
+        def __init__(self):
+            self.cleared = 0
+
+        async def clear(self):
+            self.cleared += 1
+
+    orig = topup_mod._begin_topup
+    topup_mod._begin_topup = fake_begin
+    try:
+        async def case():
+            cb = FakeCallback(tg_user(555), "deposit_start")
+            st = FakeState()
+            await topup_mod.deposit_start_callback(cb, st)
+            ok("callback darhol javob berdi", bool(cb.answers), str(cb.answers))
+            ok("FSM holati tozalandi", st.cleared == 1)
+            ok("to'lov oynasi ochildi", len(calls) == 1)
+
+        run(case())
+    finally:
+        topup_mod._begin_topup = orig
+
+
 def main() -> None:
     test_payments_service()
     test_payment_methods_kb()
@@ -679,6 +713,7 @@ def main() -> None:
     test_pre_checkout()
     test_successful_payment()
     test_pay_balance()
+    test_deposit_start_alias()
     print(f"\nBARCHA TESTLAR O'TDI: {PASSED} ta tekshiruv")
 
 
