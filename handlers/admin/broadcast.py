@@ -115,12 +115,13 @@ async def broadcast_start(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(BroadcastStates.waiting_for_content, F.text == "/cancel")
 async def broadcast_cancel(event: Any, state: FSMContext) -> None:
     """Rassilkani bekor qiladi (tasdiqlash bosqichida yoki /cancel)."""
-    await state.clear()
-
     if isinstance(event, CallbackQuery):
+        # Spinner DARHOL yopiladi.
         await event.answer("Bekor qilindi")
+        await state.clear()
         await event.message.answer(CANCELLED_TEXT)
     else:
+        await state.clear()
         await event.answer(CANCELLED_TEXT)
 
 

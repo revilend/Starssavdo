@@ -18,6 +18,7 @@ miqdorini kiritishda) qolib ketgan bo'lsa ham menyu tugmalari DARHOL ishlaydi.
 
 from __future__ import annotations
 
+import html
 import logging
 
 from aiogram import F, Router
@@ -90,8 +91,8 @@ TX_LABELS: dict[str, str] = {
 
 EMPTY_HISTORY_TEXT = (
     "📜 <b>Tranzaksiyalar tarixi</b>\n\n"
-    "Hozircha tranzaksiyalar yo'q. Balansni to'ldirib yoki do'stlaringizni "
-    "taklif qilib boshlang! 🚀"
+    "Sizda hali tranzaksiyalar mavjud emas.\n\n"
+    "Balansni to'ldirib yoki do'stlaringizni taklif qilib boshlang! 🚀"
 )
 
 
@@ -115,26 +116,36 @@ async def balance_menu(message: Message, state: FSMContext | None = None) -> Non
     if user is None:
         return
 
-    db_user = await UserRepository.get_user(user.id)
-    balance = db_user.stars_balance if db_user else 0
+    try:
+        db_user = await UserRepository.get_user(user.id)
+        balance = db_user.stars_balance if db_user else 0
+    except Exception:  # noqa: BLE001 — DB xatosi botni to'xtatmasin
+        logger.exception("Balans ma'lumotlari o'qilmadi (user=%s)", user.id)
+        await message.answer(
+            "⚠️ Balansni yuklashda xatolik. Iltimos, keyinroq urinib ko'ring."
+        )
+        return
     # `total_earned_stars` eski bazada bo'lmasligi mumkin — xavfsiz fallback.
     earned = getattr(db_user, "total_earned_stars", 0) or 0
 
-    counts = await ReferralRepository.get_user_referrals_count(user.id)
-    min_withdrawal = int(
-        await SettingsRepository.get_setting(
-            SETTING_MIN_WITHDRAWAL, settings.MIN_WITHDRAWAL_STARS
+    try:
+        counts = await ReferralRepository.get_user_referrals_count(user.id)
+        min_withdrawal = int(
+            await SettingsRepository.get_setting(
+                SETTING_MIN_WITHDRAWAL, settings.MIN_WITHDRAWAL_STARS
+            )
         )
-    )
-
-    rate = await SettingsRepository.get_star_price()
+        rate = await SettingsRepository.get_star_price()
+    except Exception:  # noqa: BLE001 — DB xatosi botni to'xtatmasin
+        logger.exception("Balans sozlamalari o'qilmadi (user=%s)", user.id)
+        counts, min_withdrawal, rate = None, settings.MIN_WITHDRAWAL_STARS, 0
     await message.answer(
         BALANCE_TEXT.format(
             balance=balance,
             balance_uzs=f"{balance * rate:,}".replace(",", " "),
-            rate=f"{rate:,}".replace(",", " "),
+            rate=f"{rate:,}".replace(",", " ") if rate else "0",
             earned=earned,
-            referrals=counts.total,
+            referrals=counts.total if counts else 0,
             min_withdrawal=min_withdrawal,
         ),
         reply_markup=get_balance_kb(balance, min_withdrawal),
@@ -175,9 +186,17 @@ async def tx_history(callback: CallbackQuery, state: FSMContext | None = None) -
     if state is not None:
         await state.clear()
 
-    transactions = await UserRepository.get_recent_transactions(
-        callback.from_user.id, limit=10
-    )
+    try:
+        transactions = await UserRepository.get_recent_transactions(
+            callback.from_user.id, limit=10
+        )
+    except Exception:  # noqa: BLE001 — DB xatosi botni qoqmaydi
+        logger.exception("Tranzaksiyalar tarixi o'qilmadi (user=%s)", callback.from_user.id)
+        await callback.message.answer(
+            "⚠️ Tranzaksiyalar tarixini yuklashda xatolik. Keyinroq urinib ko'ring.",
+            parse_mode="HTML",
+        )
+        return
 
     if not transactions:
         await callback.message.answer(EMPTY_HISTORY_TEXT, parse_mode="HTML")
@@ -187,7 +206,13 @@ async def tx_history(callback: CallbackQuery, state: FSMContext | None = None) -
     for tx in transactions:
         label = TX_LABELS.get(tx.tx_type, f"• {tx.tx_type}")
         sign = "+" if tx.amount > 0 else "−"
-        lines.append(f"{label}: <b>{sign}{abs(tx.amount)} ⭐️</b>")
+        # Sana (UTC -> ko'rinish): 21.02 14:35
+        when = tx.created_at.strftime("%d.%m %H:%M") if tx.created_at else ""
+        esc_desc = html.escape(str(tx.description)) if tx.description else ""
+        row = f"{label}: <b>{sign}{abs(tx.amount)} ⭐️</b>  ·  {when}"
+        if esc_desc:
+            row += f"  -  <i>{esc_desc}</i>"
+        lines.append(row)
 
     await callback.message.answer("\n".join(lines), parse_mode="HTML")
 
@@ -236,9 +261,10 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext | None = None)
     Inline "◀️ Orqaga" / "◀️ Bosh menyu" — xabarni yopadi va asosiy
     reply menyuni qaytaradi.
     """
+    # Spinner DARHOL yopiladi — sinki iloji bo'lsa birinchi qatorda.
+    await callback.answer()
     if state is not None:
         await state.clear()
-    await callback.answer()
 
     message = callback.message
     # Eski inline xabarni o'chirishga urinamiz (bo'lmasa — tugmalarni olib tashlaymiz)

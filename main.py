@@ -67,7 +67,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
-from typing import Annotated, AsyncIterator
+from typing import Annotated, Any, AsyncIterator
 
 import uvicorn
 from aiogram import Bot, Dispatcher
@@ -185,6 +185,26 @@ ALLOWED_UPDATES: list[str] = [
 def create_dispatcher() -> Dispatcher:
     """Dispatcher (FSM: MemoryStorage) yaratadi va routerlarni ulaydi."""
     dp = Dispatcher(storage=MemoryStorage())
+
+    # --- Global xatoliklar ushlagich (bot jim bo'lib qolmasligi uchun) ---
+    @dp.error()
+    async def _global_error_handler(event: Any) -> bool:
+        """Har qanday handler'dan oshib ketgan xatoni loglaydi."""
+        cause = getattr(event, "exception", None)
+        update = getattr(event, "update", None)
+        user_id = None
+        try:
+            user_id = getattr(getattr(update, "event", None), "from_user", None)
+            user_id = getattr(user_id, "id", None)
+        except Exception:  # noqa: BLE001
+            pass
+        logger.error(
+            "Dispatcher xatolik (user=%s): %s",
+            user_id, cause,
+            exc_info=cause if cause is not None else True,
+        )
+        # Xato allaqachon loglandi — dispatcher tomonidan qayta tashlanmaydi.
+        return True
 
     # --- Middlewarelar (outer, tartib: avval spam, keyin blok, keyin obuna) ---
     dp.update.outer_middleware(ThrottlingMiddleware())

@@ -348,6 +348,7 @@ async def card_from_panel(callback: CallbackQuery, state: FSMContext) -> None:
     Saqlangan raqam keyinchalik foydalanuvchining '💳 Balans to'ldirish'
     ekranida aynan shunday ko'rsatiladi.
     """
+    await callback.answer()
     await state.clear()
     await set_card_start(callback, state)
 
