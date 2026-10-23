@@ -54,10 +54,13 @@ from database.models import (
     DepositRequest,
     Order,
     Product,
+    PromoCode,
+    PromoRedemption,
     Referral,
     Setting,
     Transaction as TransactionRow,
     User,
+    UserBlock,
     Withdrawal,
     utcnow,
 )
@@ -80,6 +83,7 @@ TX_WITHDRAW_HOLD: Final[str] = "withdraw_hold"  # yechib olish uchun muzlatish (
 TX_REFUND: Final[str] = "refund"                # rad etilganda qaytarish (+)
 TX_ADMIN_ADJUST: Final[str] = "admin_adjust"    # admin tuzatishi (+/-)
 TX_ORDER_STARS: Final[str] = "order_stars"      # Stars to'plami xaridi (+)
+TX_PROMO: Final[str] = "promo"                 # promokod (+)
 
 # Referal statuslari
 REFERRAL_PENDING: Final[str] = "pending"
@@ -109,6 +113,7 @@ SETTING_CARD_NUMBER: Final[str] = "payment_card_number"
 SETTING_CARD_HOLDER: Final[str] = "payment_card_holder"
 SETTING_STAR_PRICE: Final[str] = "star_price_uzs"
 SETTING_CARD_LOG_CHAT: Final[str] = "card_log_chat_id"
+SETTING_ORDER_LOG_CHAT: Final[str] = "order_log_chat_id"
 
 # Balans to'ldirish so'rovlari statuslari
 DEPOSIT_PENDING: Final[str] = "pending"
@@ -153,6 +158,10 @@ class WithdrawalStateError(RepositoryError):
 
 class DepositStateError(RepositoryError):
     """Balans to'ldirish so'rovi allaqachon ko'rib chiqilgan (pending emas)."""
+
+
+class PromoError(RepositoryError):
+    """Promokod bilan bog'liq xatolik (topilmadi, limit tugagan, allaqachon ishlatilgan)."""
 
 
 # =============================================================
@@ -2379,3 +2388,227 @@ class SettingsRepository:
 
             logger.info("Sozlama yangilandi: %s = %s", key, text_value)
             return _coerce_setting(row.value, value)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_order_log_chat_id() -> int:
+        """
+        Zakaz kanali chat ID'si (`settings.order_log_chat_id`).
+
+        Barcha yangi xaridlar shu kanalga chek sifatida yuboriladi.
+        `0` — sozlanmagan (yuborilmaydi).
+        """
+        return await SettingsRepository.get_int_setting(
+            SETTING_ORDER_LOG_CHAT, 0
+        )
+
+
+# =============================================================
+# 9. PROMOKOD REPOSITORY
+# =============================================================
+class PromoRepository:
+    """Promokodlar: yaratish, ro'yxat, bir marta ishlatish (atomik)."""
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def create_code(
+        code: str,
+        stars: int,
+        max_uses: int = 0,
+        created_by: int | None = None,
+    ) -> PromoCode:
+        """
+        Yangi promokod yaratadi (kod katta harflarda saqlanadi).
+
+        Raises:
+            PromoError: kod allaqachon mavjud.
+            ValueError: noto'g'ri qiymat (stars <= 0, max_uses < 0, bo'sh kod).
+        """
+        normalized = (code or "").strip().upper()
+        if not normalized or len(normalized) > 32:
+            raise ValueError("Kod 1-32 belgi bo'lishi kerak")
+        if int(stars) <= 0:
+            raise ValueError("Stars miqdori 0 dan katta bo'lishi kerak")
+        if int(max_uses) < 0:
+            raise ValueError("Cheklov soni manfiy bo'lishi mumkin emas")
+
+        async with get_session() as session:
+            existing = await session.get(PromoCode, normalized)
+            if existing is not None:
+                raise PromoError(f"'{normalized}' kod allaqachon mavjud")
+
+            promo = PromoCode(
+                code=normalized,
+                stars=int(stars),
+                max_uses=int(max_uses),
+                used_count=0,
+                is_active=True,
+                created_by=created_by,
+            )
+            session.add(promo)
+            try:
+                await session.flush()
+            except IntegrityError:
+                await session.rollback()
+                raise PromoError(
+                    f"'{normalized}' kod allaqachon mavjud"
+                ) from None
+
+            logger.info(
+                "Promokod yaratildi: %s (+%s⭐, limit=%s, admin=%s)",
+                normalized, stars, max_uses or "∞", created_by,
+            )
+            return promo
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_code(code: str) -> PromoCode | None:
+        """Kodni (katta harflarda) qaytaradi — topilmasa None."""
+        normalized = (code or "").strip().upper()
+        async with get_session() as session:
+            return await session.get(PromoCode, normalized)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def list_codes(limit: int = 20) -> list[PromoCode]:
+        """Eng yangi promokodlar ro'yxati (admin uchun)."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(PromoCode)
+                .order_by(PromoCode.created_at.desc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def redeem_code(code: str, user_id: int) -> int:
+        """
+        Promokodni bir marta ishlatish — ATOMIK (bitta tranzaksiya):
+          1. Kod `FOR UPDATE` bilan qulflanadi.
+          2. Topilmadi/ faol emas -> `PromoError`.
+          3. Limit tugagan -> `PromoError`.
+          4. Shu foydalanuvchi allaqachan ishlatgan -> `PromoError`.
+          5. Balansga Stars qo'shiladi, `used_count` oshadi va
+             `promo_redemptions` yozuvi yaratiladi (UNIQUE himoyasi).
+
+        Returns: yangi balans.
+
+        Raises:
+            PromoError: kod topilmadi, faol emas, limit tugagan yoki
+                foydalanuvchi allaqachan ishlatgan.
+        """
+        normalized = (code or "").strip().upper()
+
+        async with get_session() as session:
+            promo = await session.get(PromoCode, normalized, with_for_update=True)
+            if promo is None or not promo.is_active:
+                raise PromoError("Bunday promokod topilmadi ❌")
+
+            if promo.max_uses > 0 and promo.used_count >= promo.max_uses:
+                raise PromoError("Bu promokod limiti tugagan ⌛️")
+
+            already = await session.execute(
+                select(PromoRedemption.id).where(
+                    PromoRedemption.code == normalized,
+                    PromoRedemption.user_id == user_id,
+                )
+            )
+            if already.scalar_one_or_none() is not None:
+                raise PromoError("Siz bu promokoddan allaqachon foydalaningiz 🚫")
+
+            user = await session.get(User, user_id, with_for_update=True)
+            if user is None:
+                raise PromoError("Profil topilmadi — /start bosing")
+
+            user.stars_balance = (user.stars_balance or 0) + promo.stars
+            user.total_earned_stars = (user.total_earned_stars or 0) + promo.stars
+            promo.used_count = int(promo.used_count or 0) + 1
+
+            session.add(
+                TransactionRow(
+                    user_id=user_id,
+                    amount=promo.stars,
+                    tx_type=TX_PROMO,
+                    description=f"Promokod: {normalized}",
+                    reference_id=normalized,
+                )
+            )
+            session.add(
+                PromoRedemption(
+                    code=normalized,
+                    user_id=user_id,
+                    stars=promo.stars,
+                )
+            )
+            await session.flush()
+
+            logger.info(
+                "Promokod ishlatildi: %s user=%s +%s⭐ (used=%s/%s)",
+                normalized, user_id, promo.stars,
+                promo.used_count, promo.max_uses or "∞",
+            )
+            return int(user.stars_balance)
+
+
+# =============================================================
+# 10. BLOK REPOSITORY (admin tomonidan bloklash/ochish)
+# =============================================================
+class BlockRepository:
+    """Bloklangan foydalanuvchilar (`user_blocks` jadvali)."""
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def block_user(
+        user_id: int, blocked_by: int | None = None, reason: str | None = None
+    ) -> bool:
+        """
+        Foydalanuvchini bloklaydi (`user_blocks` + `users.is_active=False`).
+
+        Returns: True — yangi blok; False — allaqachon bloklangan.
+        """
+        async with get_session() as session:
+            existing = await session.get(UserBlock, user_id)
+            if existing is not None:
+                return False
+
+            session.add(
+                UserBlock(
+                    user_id=user_id,
+                    blocked_by=blocked_by,
+                    reason=reason,
+                )
+            )
+            user = await session.get(User, user_id)
+            if user is not None:
+                user.is_active = False
+            await session.flush()
+            logger.info("Foydalanuvchi bloklandi: %s (admin=%s)", user_id, blocked_by)
+            return True
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def unblock_user(user_id: int) -> bool:
+        """Blokni olib tashlaydi.
+
+        Returns: True — blok olib tashlandi; False — bloklangan emas edi.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                delete(UserBlock).where(UserBlock.user_id == user_id)
+            )
+            await session.flush()
+            removed = bool(result.rowcount)
+            if removed:
+                user = await session.get(User, user_id)
+                if user is not None:
+                    user.is_active = True
+                logger.info("Foydalanuvchi bloki ochildi: %s", user_id)
+            return removed
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def is_blocked(user_id: int) -> bool:
+        """Foydalanuvchi bloklanganmi (tez tekshiruv)."""
+        async with get_session() as session:
+            return await session.get(UserBlock, user_id) is not None

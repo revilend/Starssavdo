@@ -582,3 +582,101 @@ class AntiFraudLog(Base):
     )
 
     __table_args__ = (Index("ix_antifraud_referrer_created", "referrer_id", "created_at"),)
+
+
+# =============================================================
+# 11. PROMOKODLAR
+# =============================================================
+class PromoCode(Base):
+    """
+    Admin yaratgan promokodlar.
+
+    Foydalanuvchi kodni botga yozganda `PromoRedemption` orqali bir marta
+    ishlata oladi; limit (`max_uses`) tugagach kod o'chirilmaydi, faqat
+    rad etiladi.
+    """
+
+    __tablename__ = "promo_codes"
+
+    code: Mapped[str] = mapped_column(
+        String(32), primary_key=True, comment="Kod (katta harflarda)"
+    )
+    stars: Mapped[int] = mapped_column(
+        BIGINT, nullable=False, comment="Beriladigan Stars miqdori"
+    )
+    max_uses: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Nechta odam ishlata oladi (0 — cheklovsiz)",
+    )
+    used_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Hozircha necha marta ishlatilgan",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        BIGINT, nullable=True, comment="Qaysi admin yaratgan"
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint("stars > 0", name="ck_promo_stars_positive"),
+        CheckConstraint("max_uses >= 0", name="ck_promo_max_uses_non_negative"),
+    )
+
+
+class PromoRedemption(Base):
+    """Bir foydalanuvchining bir kodni qachon ishlatgani (faqat 1 marta)."""
+
+    __tablename__ = "promo_redemptions"
+
+    id: Mapped[int] = mapped_column(BIGINT, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("promo_codes.code", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        BIGINT,
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stars: Mapped[int] = mapped_column(BIGINT, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    __table_args__ = (
+        # Har bir odam bir kodni faqat bir marta ishlata oladi (atomik himoya)
+        Index(
+            "ux_promo_redemptions_code_user",
+            "code",
+            "user_id",
+            unique=True,
+        ),
+    )
+
+
+# =============================================================
+# 12. BLOKLANGAN FOYDALANUVCHILAR
+# =============================================================
+class UserBlock(Base):
+    """Admin tomonidan bloklangan foydalanuvchilar (vaqtincha yoki cheksiz)."""
+
+    __tablename__ = "user_blocks"
+
+    user_id: Mapped[int] = mapped_column(
+        BIGINT,
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blocked_by: Mapped[int | None] = mapped_column(BIGINT, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )

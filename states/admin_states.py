@@ -92,3 +92,24 @@ class PaymentCardStates(StatesGroup):
     waiting_for_holder = State()     # Karta egasining F.I.SH.
     waiting_for_star_price = State()  # 1 Stars narxi (so'm)
     waiting_for_log_chat = State()    # Xabarnoma guruhi/kanali chat ID
+
+
+class UserSearchStates(StatesGroup):
+    """🔎 Foydalanuvchini qidirish va uning balansini boshqarish."""
+
+    waiting_for_user_id = State()   # Telegram ID kiritiladi
+    waiting_for_amount = State()    # Qo'shish/ayirish miqdori (+/-)
+
+
+class PromoStates(StatesGroup):
+    """🎟️ Yangi promokod yaratish (admin)."""
+
+    waiting_for_code = State()    # KOD nomi (masalan: YUTUQ)
+    waiting_for_stars = State()   # Stars miqdori (masalan: 10)
+    waiting_for_limit = State()   # Cheklov soni (50 yoki 0 — cheklovsiz)
+
+
+class OrderChannelStates(StatesGroup):
+    """📬 Zakaz kanali sozlamasi (barcha xaridlar cheki shu kanalga)."""
+
+    waiting_for_chat_id = State()  # Yopiq kanal ID (-100...)

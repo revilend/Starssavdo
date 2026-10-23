@@ -55,6 +55,12 @@ CB_ADM_EXIT = "adm_exit"
 CB_ADM_CH_ADD = "adm_chadd"
 CB_ADM_BACK = "adm_back"
 CB_ADM_BUTTON_PREFIX = "adm_btn_"
+# Yangi admin vositalari (handlers/admin/bot_tools.py)
+CB_ADM_STAR_BALANCE = "adm_star_balance"    # botning rasmiy Stars balansi
+CB_ADM_STAR_FILL = "adm_star_fill"          # botga Stars to'ldirish (XTR)
+CB_ADM_USER_SEARCH = "adm_user_search"      # foydalanuvchini qidirish
+CB_ADM_PROMO = "adm_promo"                  # promokodlar
+CB_ADM_ORDER_CHANNEL = "adm_order_channel"  # zakaz kanali
 # Mahsulotlar bo'limi (admin CRUD)
 CB_ADM_PROD_NEW = "adm_pnew"                 # yangi mahsulot — toifa tanlash
 CB_ADM_PROD_LIST_PREFIX = "adm_plist_"       # + category
@@ -120,6 +126,37 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
             text="🧾 Buyurtmalar (UZS)",
             callback_data=CB_ADM_ORDERS,
             style="success",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="💰 Bot Stars hisobi",
+            callback_data=CB_ADM_STAR_BALANCE,
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="⭐️ Botga Stars solish",
+            callback_data=CB_ADM_STAR_FILL,
+            style="success",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🔎 Foydalanuvchini qidirish",
+            callback_data=CB_ADM_USER_SEARCH,
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="🎟️ Promokod",
+            callback_data=CB_ADM_PROMO,
+            style="success",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="📬 Zakaz kanali",
+            callback_data=CB_ADM_ORDER_CHANNEL,
+            style="primary",
         )
     )
     builder.row(build_inline_button("adm_exit", callback_data=CB_ADM_EXIT))

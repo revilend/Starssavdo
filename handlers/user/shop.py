@@ -64,6 +64,7 @@ from keyboards.inline import (
 from services.button_registry import ButtonText
 from services.card_payment import format_som
 from services.gift_delivery import deliver_gift
+from services.order_log import notify_order_paid
 from services.payments import (
     ORDER_PAYLOAD_PREFIX,
     build_order_payload,
@@ -727,6 +728,14 @@ async def _purchase_with_balance(
         user_id, order.id, product.id, product.price_xtr, delivered,
     )
 
+    # Zakaz kanali (sozlangan bo'lsa) — chiroyli chek + topshirish tugmalari
+    try:
+        await notify_order_paid(
+            callback.bot, order, product=product, user=None
+        )
+    except Exception:  # noqa: BLE001 — chek yetkazishni buzmasin
+        logger.exception("Zakaz kanali chekida xatolik: order=%s", order.id)
+
 
 @router.callback_query(StateFilter("*"), F.data.startswith("buy_prod_"))
 async def buy_product(
@@ -941,6 +950,14 @@ async def on_successful_payment(message: Message) -> None:
         "XTR to'lov qabul qilindi: user=%s order=%s charge=%s amount=%s gift=%s",
         message.from_user.id, order.id, charge_id, total_amount, delivered,
     )
+
+    # Zakaz kanali (sozlangan bo'lsa) — chiroyli chek + topshirish tugmalari
+    try:
+        await notify_order_paid(
+            message.bot, order, product=product, user=message.from_user
+        )
+    except Exception:  # noqa: BLE001 — chek yetkazishni buzmasin
+        logger.exception("Zakaz kanali chekida xatolik: order=%s", order.id)
 
 
 # =============================================================

@@ -43,6 +43,7 @@ from database.queries import (
 )
 from services.card_payment import find_payment_amount, format_som
 from services.gift_delivery import deliver_gift
+from services.order_log import notify_order_paid
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,12 @@ async def deliver_order(
     )
     for admin_id in settings.ADMIN_IDS:
         await _notify(bot, admin_id, admin_text, admin_markup)
+
+    # 3) Zakaz kanali (sozlangan bo'lsa) — chiroyli chek + topshirish tugmalari
+    try:
+        await notify_order_paid(bot, order, product=product)
+    except Exception:  # noqa: BLE001 — chek yuborilishi yetkazishni buzmasin
+        logger.exception("Zakaz kanali chekida kutilmagan xatolik: order=%s", order.id)
 
     logger.info(
         "Buyurtma yetkazildi: order=%s user=%s category=%s pay=%s",

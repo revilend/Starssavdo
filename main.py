@@ -84,6 +84,7 @@ from config.settings import settings
 # -------------------------------------------------------------
 # 1. Admin routerlari (birinchi ulanadi)
 # -------------------------------------------------------------
+from handlers.admin.bot_tools import router as admin_bot_tools_router
 from handlers.admin.broadcast import router as admin_broadcast_router
 from handlers.admin.buttons import router as admin_buttons_router
 from handlers.admin.channels import router as admin_channels_router
@@ -99,6 +100,7 @@ from handlers.admin.withdrawals import router as admin_withdrawals_router
 # -------------------------------------------------------------
 from handlers.user.card_auto import router as card_auto_router
 from handlers.user.menu import router as menu_router
+from handlers.user.promo import router as promo_router
 from handlers.user.payout import router as payout_router
 from handlers.user.referral import router as referral_router
 from handlers.user.shop import router as shop_router
@@ -109,6 +111,7 @@ from handlers.user.topup import router as topup_router
 # -------------------------------------------------------------
 # 3. Middlewarelar
 # -------------------------------------------------------------
+from middlewares.blocking import BlockingMiddleware
 from middlewares.subscription import SubscriptionMiddleware
 from middlewares.throttling import ThrottlingMiddleware
 
@@ -183,12 +186,14 @@ def create_dispatcher() -> Dispatcher:
     """Dispatcher (FSM: MemoryStorage) yaratadi va routerlarni ulaydi."""
     dp = Dispatcher(storage=MemoryStorage())
 
-    # --- Middlewarelar (outer, tartib: avval spam, keyin obuna) ---
+    # --- Middlewarelar (outer, tartib: avval spam, keyin blok, keyin obuna) ---
     dp.update.outer_middleware(ThrottlingMiddleware())
+    dp.update.outer_middleware(BlockingMiddleware())
     dp.update.outer_middleware(SubscriptionMiddleware())
 
     # --- Routerlar: admin -> subscription -> start/referral -> shop/payout ---
     dp.include_router(admin_panel_router)
+    dp.include_router(admin_bot_tools_router)
     dp.include_router(admin_orders_router)
     dp.include_router(admin_products_router)
     dp.include_router(admin_channels_router)
@@ -206,6 +211,7 @@ def create_dispatcher() -> Dispatcher:
     # tugmalari darhol javob beradi (state handler'lari ularni to'smaydi).
     dp.include_router(start_router)
     dp.include_router(menu_router)
+    dp.include_router(promo_router)
     dp.include_router(shop_router)
     dp.include_router(referral_router)
 

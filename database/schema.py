@@ -82,6 +82,38 @@ SCHEMA_DDL: tuple[str, ...] = (
         processed_at TIMESTAMPTZ
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS promo_codes (
+        code VARCHAR(32) PRIMARY KEY,
+        stars BIGINT NOT NULL,
+        max_uses INTEGER NOT NULL DEFAULT 0,
+        used_count INTEGER NOT NULL DEFAULT 0,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS promo_redemptions (
+        id BIGSERIAL PRIMARY KEY,
+        code VARCHAR(32) NOT NULL REFERENCES promo_codes(code) ON DELETE CASCADE,
+        user_id BIGINT NOT NULL,
+        stars BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_promo_redemptions_code_user
+        ON promo_redemptions (code, user_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS user_blocks (
+        user_id BIGINT PRIMARY KEY,
+        reason TEXT,
+        blocked_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 )
 
 # Ma'lumotlarni to'g'rilash: eski qatorlarda NULL balans bo'lsa 0 ga tenglash

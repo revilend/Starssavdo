@@ -163,7 +163,8 @@ def main() -> None:
     print("== builders: admin ==")
     kb = get_admin_main_kb()
     flat = [b for row in inline_rows(kb) for b in row]
-    ok("12 tugma (11 bo'lim + chiqish)", len(flat) == 12, str(len(flat)))
+    ok("17 tugma (11 bo'lim + 5 yangi vosita + buyurtmalar + chiqish)",
+       len(flat) == 17, str(len(flat)))
     ok("callbacklar to'liq",
        [b.callback_data for b in flat[:11]] == ["adm_stats", "adm_broadcast", "adm_channels",
                                                "adm_ref_price", "adm_withdrawals", "adm_balance_edit",
@@ -177,9 +178,15 @@ def main() -> None:
     ok("yangi bo'lim: Tugnalar va Emojilar", flat[9].text == "🎛 Tugnalar va Emojilar")
     ok("buyurtmalar bo'limi", flat[10].text == "🧾 Buyurtmalar (UZS)"
        and flat[10].callback_data == "adm_orders")
-    ok("chiqish oxirida to'liq qator", flat[11].text == "❌ Chiqish"
-       and flat[11].callback_data == "adm_exit" and flat[11].style == "danger"
-       and len(inline_rows(kb)[6]) == 1)
+    ok("5 yangi vosita tugmalari",
+       [b.callback_data for b in flat[11:16]] == [
+           "adm_star_balance", "adm_star_fill",
+           "adm_user_search", "adm_promo",
+           "adm_order_channel",
+       ], str([b.callback_data for b in flat[11:16]]))
+    ok("chiqish oxirida to'liq qator", flat[16].text == "❌ Chiqish"
+       and flat[16].callback_data == "adm_exit" and flat[16].style == "danger"
+       and len(inline_rows(kb)[len(inline_rows(kb)) - 1]) == 1)
 
     class ACh:
         def __init__(self, i, title, active):
