@@ -130,10 +130,12 @@ async def top_referrers(
     callback: CallbackQuery, state: FSMContext | None = None
 ) -> None:
     """🏆 Top 10 taklif qiluvchilar ro'yxatini ko'rsatadi."""
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
+    await callback.answer()
+
     top = await ReferralRepository.get_top_referrers(limit=10)
 
     if not top:
-        await callback.answer()
         await callback.message.answer(EMPTY_TOP_TEXT, parse_mode="HTML")
         return
 
@@ -151,7 +153,6 @@ async def top_referrers(
 
         rows.append(f"{badge} {who} — <b>{entry.completed}</b> ta do'st")
 
-    await callback.answer()
     await callback.message.answer(
         TOP_REFERRALS_TEXT.format(limit=len(top), rows="\n".join(rows)),
         parse_mode="HTML",

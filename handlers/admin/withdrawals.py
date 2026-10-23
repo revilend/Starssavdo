@@ -128,11 +128,12 @@ async def _notify_user(bot, user_id: int, text: str) -> None:
 @router.callback_query(F.data == CB_ADM_WITHDRAWALS)
 async def withdrawals_list(callback: CallbackQuery) -> None:
     """[ 💳 Yechib olish so'rovlari ] — pending ro'yxatini ko'rsatadi."""
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
+    await callback.answer()
+
     pending = await WithdrawalRepository.get_withdrawals(
         status=WITHDRAWAL_PENDING, limit=10
     )
-
-    await callback.answer()
 
     if not pending:
         await callback.message.answer(EMPTY_LIST_TEXT)
@@ -155,28 +156,28 @@ async def withdrawal_approve(callback: CallbackQuery) -> None:
     withdrawal_id = int(callback.data.rsplit("_", 1)[-1])
     admin_id = callback.from_user.id
 
+    # Spinner DARHOL yopiladi — DB tranzaksiyasi kutdirilmaydi
+    await callback.answer()
+
     try:
         w = await WithdrawalRepository.approve_withdrawal(
             withdrawal_id, admin_id
         )
     except WithdrawalStateError:
-        await callback.answer(
-            "⚠️ Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True
-        )
+        await callback.message.answer("⚠️ Bu so'rov allaqachon ko'rib chiqilgan.")
         return
     except RepositoryError:
-        await callback.answer("⚠️ So'rov topilmadi.", show_alert=True)
+        await callback.message.answer("⚠️ So'rov topilmadi.")
         return
     except SQLAlchemyError:
         logger.exception("Withdrawal tasdiqlashda DB xatoligi: %s", withdrawal_id)
-        await callback.answer("⚠️ Bazada xatolik yuz berdi.", show_alert=True)
+        await callback.message.answer("⚠️ Bazada xatolik yuz berdi.")
         return
 
     logger.info(
         "Withdrawal tasdiqlandi (admin=%s): id=%s amount=%s",
         admin_id, w.id, w.amount,
     )
-    await callback.answer("✅ Tasdiqlandi")
 
     # Foydalanuvchiga "To'lovingiz yuborildi" xabari
     destination = html.escape(f"{w.destination_type}:{w.destination_address}")
@@ -212,28 +213,28 @@ async def withdrawal_reject(callback: CallbackQuery) -> None:
     withdrawal_id = int(callback.data.rsplit("_", 1)[-1])
     admin_id = callback.from_user.id
 
+    # Spinner DARHOL yopiladi — DB tranzaksiyasi kutdirilmaydi
+    await callback.answer()
+
     try:
         w = await WithdrawalRepository.reject_withdrawal(
             withdrawal_id, admin_id, DEFAULT_REJECT_REASON
         )
     except WithdrawalStateError:
-        await callback.answer(
-            "⚠️ Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True
-        )
+        await callback.message.answer("⚠️ Bu so'rov allaqachon ko'rib chiqilgan.")
         return
     except RepositoryError:
-        await callback.answer("⚠️ So'rov topilmadi.", show_alert=True)
+        await callback.message.answer("⚠️ So'rov topilmadi.")
         return
     except SQLAlchemyError:
         logger.exception("Withdrawal rad etishda DB xatoligi: %s", withdrawal_id)
-        await callback.answer("⚠️ Bazada xatolik yuz berdi.", show_alert=True)
+        await callback.message.answer("⚠️ Bazada xatolik yuz berdi.")
         return
 
     logger.info(
         "Withdrawal rad etildi (admin=%s): id=%s amount=%s reason=%s",
         admin_id, w.id, w.amount, DEFAULT_REJECT_REASON,
     )
-    await callback.answer("❌ Rad etildi — Stars qaytarildi")
 
     # Foydalanuvchiga rad etish + refund haqida xabar
     destination = html.escape(f"{w.destination_type}:{w.destination_address}")

@@ -107,6 +107,9 @@ async def admin_stats(callback: CallbackQuery) -> None:
     [ 📊 Jonli statistika ] — barcha ko'rsatkichlarni bazadan
     real vaqtda hisoblaydi va yangi xabar sifatida ko'rsatadi.
     """
+    # Spinner DARHOL yopiladi — DB hisob-kitoblari tugmani kutdirmaydi
+    await callback.answer()
+
     stats = await UserRepository.get_total_stats()
     today_users = await UserRepository.count_new_users_today()
     active_channels = await ChannelRepository.get_active_channels()
@@ -127,7 +130,6 @@ async def admin_stats(callback: CallbackQuery) -> None:
         pending_orders_count=pending_orders,
     )
 
-    await callback.answer()
     await callback.message.answer(text)
 
 

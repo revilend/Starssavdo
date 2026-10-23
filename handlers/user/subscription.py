@@ -63,6 +63,9 @@ async def cb_check_subscription(callback: CallbackQuery) -> None:
     user_id = user.id
     display_name = html.escape(user.first_name or user.username or "do'stim")
 
+    # Spinner DARHOL yopiladi — Telegram API tekshiruvi kutdirilmaydi
+    await callback.answer()
+
     # ---------------- 1. Qayta tekshiruv ----------------
     channels = await get_active_channel_dicts()
     if channels:
@@ -70,9 +73,9 @@ async def cb_check_subscription(callback: CallbackQuery) -> None:
         is_subscribed, unjoined = await check_user_subscription(bot, user_id, channels)
 
         if not is_subscribed:
-            # Hali ham a'zo emas — alert + klaviaturani holatga moslash
-            await callback.answer(
-                "❌ Hali barcha kanallarga a'zo bo'lmadingiz!", show_alert=True
+            # Hali ham a'zo emas — ogohlantirish + klaviaturani holatga moslash
+            await callback.message.answer(
+                "❌ Hali barcha kanallarga a'zo bo'lmadingiz!"
             )
             try:
                 # Xabarni qayta yubormasdan, faqat klaviaturani
@@ -116,8 +119,6 @@ async def cb_check_subscription(callback: CallbackQuery) -> None:
             await callback.message.edit_text("✅ Obuna tasdiqlandi!")
         except (TelegramAPIError, AttributeError):
             pass
-
-    await callback.answer("✅ Xush kelibsiz! Barcha imkoniyatlar ochildi.")
 
     is_admin = user_id in settings.ADMIN_IDS
     await callback.message.answer(

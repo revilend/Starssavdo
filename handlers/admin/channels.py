@@ -80,8 +80,10 @@ def _list_text(channels: list) -> str:
 @router.callback_query(F.data == CB_ADM_CHANNELS)
 async def channels_list(callback: CallbackQuery) -> None:
     """[ 📢 Homiy kanallar ] — barcha kanallarni (holati bilan) ko'rsatadi."""
-    channels = await ChannelRepository.get_all_channels()
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
     await callback.answer()
+
+    channels = await ChannelRepository.get_all_channels()
     await callback.message.answer(
         _list_text(channels),
         reply_markup=get_admin_channel_manage_kb(channels),
@@ -110,8 +112,8 @@ async def _refresh_list(message: Message, text: str | None = None) -> None:
 @router.callback_query(F.data == CB_ADM_CH_ADD)
 async def channel_add_start(callback: CallbackQuery, state: FSMContext) -> None:
     """[ ➕ Yangi kanal qo'shish ] — chat_id so'raydi."""
-    await state.set_state(AddChannelStates.waiting_for_chat_id)
     await callback.answer()
+    await state.set_state(AddChannelStates.waiting_for_chat_id)
     await callback.message.answer(
         "➕ <b>Yangi kanal qo'shish</b>\n\n"
         "1/3 — Kanal <b>chat_id</b> raqamini yuboring.\n"
@@ -214,10 +216,13 @@ async def channel_add_link(message: Message, state: FSMContext) -> None:
 async def channel_toggle(callback: CallbackQuery) -> None:
     """[ ✅/🚫 ] — kanalni faol/nofaol holatga o'tkazadi."""
     channel_id = int(callback.data.rsplit("_", 1)[-1])
-    channel = await ChannelRepository.get_channel(channel_id)
 
+    # Spinner DARHOL yopiladi (DB so'rovlaridan oldin)
+    await callback.answer()
+
+    channel = await ChannelRepository.get_channel(channel_id)
     if channel is None:
-        await callback.answer("Kanal topilmadi", show_alert=True)
+        await callback.message.answer("⚠️ Kanal topilmadi.")
         return
 
     updated = await ChannelRepository.toggle_channel_status(
@@ -227,9 +232,6 @@ async def channel_toggle(callback: CallbackQuery) -> None:
         "Kanal holati o'zgardi (admin): id=%s -> is_active=%s",
         channel_id, updated.is_active if updated else None,
     )
-    await callback.answer(
-        "✅ Kanal yoqildi" if updated and updated.is_active else "🚫 Kanal o'chirildi"
-    )
     await _refresh_list(callback.message)
 
 
@@ -237,14 +239,16 @@ async def channel_toggle(callback: CallbackQuery) -> None:
 async def channel_delete(callback: CallbackQuery) -> None:
     """[ 🗑 ] — kanalni bazadan butunlay o'chiradi."""
     channel_id = int(callback.data.rsplit("_", 1)[-1])
-    channel = await ChannelRepository.get_channel(channel_id)
 
+    # Spinner DARHOL yopiladi (DB so'rovlaridan oldin)
+    await callback.answer()
+
+    channel = await ChannelRepository.get_channel(channel_id)
     if channel is None:
-        await callback.answer("Kanal topilmadi", show_alert=True)
+        await callback.message.answer("⚠️ Kanal topilmadi.")
         return
 
     await ChannelRepository.delete_channel(channel.chat_id)
     logger.warning("Kanal o'chirildi (admin): id=%s chat_id=%s", channel_id, channel.chat_id)
 
-    await callback.answer(f"🗑 '{channel.title}' o'chirildi")
     await _refresh_list(callback.message)

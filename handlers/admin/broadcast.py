@@ -102,8 +102,8 @@ CONTENT_TYPES = {"text", "photo", "video"}
 @router.callback_query(F.data == CB_ADM_BROADCAST)
 async def broadcast_start(callback: CallbackQuery, state: FSMContext) -> None:
     """[ 📢 Ommaviy xabar ] — kontent so'raydi."""
-    await state.set_state(BroadcastStates.waiting_for_content)
     await callback.answer()
+    await state.set_state(BroadcastStates.waiting_for_content)
     await callback.message.answer(BROADCAST_PROMPT_TEXT)
 
 
@@ -183,6 +183,9 @@ def _confirm_kb():
 @router.callback_query(BroadcastStates.waiting_for_confirm, F.data == CB_BC_SEND)
 async def broadcast_confirm(callback: CallbackQuery, state: FSMContext) -> None:
     """Tasdiqlangach rassilkani fon taskda boshlaydi."""
+    # Spinner DARHOL yopiladi
+    await callback.answer("🚀 Yuborilmoqda…")
+
     data = await state.get_data()
     await state.clear()
 
@@ -190,7 +193,6 @@ async def broadcast_confirm(callback: CallbackQuery, state: FSMContext) -> None:
     message_id = int(data["message_id"])
     audience = int(data.get("audience", 0))
 
-    await callback.answer("🚀 Yuborilmoqda…")
     await callback.message.answer(STARTED_TEXT.format(audience=audience))
 
     # Admin chatiga hisobot alohida yuboriladi — rassilka uzilmaydi

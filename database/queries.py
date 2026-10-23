@@ -438,6 +438,24 @@ class UserRepository:
 
     # ------------------------------------------------------------------
     @staticmethod
+    async def is_channels_verified(user_id: int) -> bool:
+        """
+        Faqat `channels_verified` ustunini o'qiydi (yengil so'rov).
+
+        Middleware har bir yangilanishda to'liq `User` qatorini yuklamasligi
+        uchun ishlatiladi.
+
+        Returns: True — foydalanuvchi kanallarga a'zo deb tasdiqlangan;
+                 False — tasdiqlanmagan yoki foydalanuvchi topilmadi.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(User.channels_verified).where(User.user_id == user_id)
+            )
+            return bool(result.scalar_one_or_none())
+
+    # ------------------------------------------------------------------
+    @staticmethod
     async def get_total_stats() -> TotalStats:
         """
         Admin uchun umumiy hisobot:

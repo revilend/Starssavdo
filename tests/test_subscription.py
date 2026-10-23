@@ -149,9 +149,23 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def fresh_channels_cache():
+def fresh_channels_cache(verified: bool = True):
     cc.clear_subscription_cache()
     cc.invalidate_channels_cache()
+    if verified:
+        mw_mod.invalidate_verified_cache()
+
+
+class FakeUserRepo:
+    """`UserRepository.is_channels_verified` stub'i (DB'siz tekshiruv)."""
+
+    def __init__(self, verified_ids=()):
+        self.verified_ids = set(verified_ids)
+        self.calls = 0
+
+    async def is_channels_verified(self, user_id: int) -> bool:
+        self.calls += 1
+        return user_id in self.verified_ids
 
 
 # =============================================================
@@ -281,6 +295,11 @@ def test_middleware() -> None:
     print("== middlewares/subscription ==")
     mw = SubscriptionMiddleware()
 
+    # Haqiqiy DB'ga murojaat qilmaslik uchun repository stub'i
+    orig_repo = mw_mod.UserRepository
+    repo = FakeUserRepo()
+    mw_mod.UserRepository = repo
+
     async def dummy_handler(event, data):
         data["called"] = True
         return "HANDLED"
@@ -291,9 +310,10 @@ def test_middleware() -> None:
                      "invite_link": f"https://t.me/+{i}"} for i in range(1, n + 1)]
         return _stub
 
-    def run_case(uid, statuses, data_extra=None, event=None, channels=None):
+    def run_case(uid, statuses, data_extra=None, event=None, channels=None,
+                 verified_cache=True):
         async def _run():
-            fresh_channels_cache()
+            fresh_channels_cache(verified_cache)
             orig = mw_mod.get_active_channel_dicts
             mw_mod.get_active_channel_dicts = channels or channels_stub()
             try:
@@ -305,7 +325,7 @@ def test_middleware() -> None:
                 return result, bot, ev, data
             finally:
                 mw_mod.get_active_channel_dicts = orig
-                fresh_channels_cache()
+                fresh_channels_cache(verified_cache)
         return asyncio.run(_run())
 
     # A) user yo'q -> o'tkaziladi
@@ -375,6 +395,43 @@ def test_middleware() -> None:
     res, bot, ev, data = run_case(103, statuses={}, channels=_empty_channels)
     ok("kanallar bo'sh -> erkin foydalanish", res == "HANDLED")
 
+    # H) bazada channels_verified=True -> Telegram API'siz o'tadi
+    repo.verified_ids = {104}
+    res, bot, ev, data = run_case(104, statuses={-1001: "left", -1002: "left"})
+    ok("channels_verified=True -> API chaqirilmaydi",
+       res == "HANDLED" and bot.calls == [], str(bot.calls))
+    ok("channels_verified uchun DB so'rovi bo'ldi", repo.calls >= 1)
+
+    # I) xotira keshi: ikkinchi yangilanishda DB ham, API ham yo'q
+    #    1-chi chaqiruv — DB belgisidan o'qib, keshga yozadi
+    res, bot2, _ev, _d = run_case(104, statuses={-1001: "left"},
+                                  verified_cache=False)
+    ok("1-chi yangilanish DB belgisidan o'tdi",
+       res == "HANDLED" and bot2.calls == [])
+    calls_before = repo.calls
+    #    2-chi chaqiruv — faqat xotira keshidan (DB/API'siz)
+    res, bot2b, _ev, _d = run_case(104, statuses={-1001: "left"},
+                                   verified_cache=False)
+    ok("kesh: DB so'rovi takrorlanmadi",
+       res == "HANDLED" and repo.calls == calls_before, str(repo.calls))
+    ok("kesh: API chaqiruvi yo'q", bot2b.calls == [])
+
+    # J) muvaffaqiyatli Telegram tekshiruvi keshga yoziladi
+    repo.verified_ids = set()
+    mw_mod.invalidate_verified_cache()
+    res, bot3, _ev, _d = run_case(105, statuses={-1001: "member", -1002: "member"},
+                                  verified_cache=False)
+    ok("a'zo -> o'tdi", res == "HANDLED")
+    ok("tekshiruv 2 ta API chaqiruvi", len(bot3.calls) == 2, str(bot3.calls))
+    calls_before = repo.calls
+    res, bot4, _ev, _d = run_case(105, statuses={-1001: "member", -1002: "member"},
+                                  verified_cache=False)
+    ok("keyingi yangilanish keshdan o'tdi",
+       res == "HANDLED" and bot4.calls == [] and repo.calls == calls_before,
+       f"api={bot4.calls} db={repo.calls}")
+
+    mw_mod.UserRepository = orig_repo
+
 
 # =============================================================
 # 4. HANDLER — check_subscription
@@ -428,12 +485,17 @@ def test_handler() -> None:
         bot = FakeBot()
         cb = FakeCallback(tg_user(10, "Ali"), bot)
         run(sub_mod.cb_check_subscription(cb))
-        ok("a'zo emas: alert matni", cb.answers and cb.answers[0] == {
-            "text": "❌ Hali barcha kanallarga a'zo bo'lmadingiz!", "show_alert": True})
+        ok("a'zo emas: spinner darhol yopildi",
+           cb.answers and cb.answers[0] == {"text": None, "show_alert": False})
+        ok("a'zo emas: ogohlantirish xabari",
+           len(cb.message.answers) == 1
+           and cb.message.answers[0]["text"]
+           == "❌ Hali barcha kanallarga a'zo bo'lmadingiz!")
         ok("a'zo emas: verified chaqirilmadi", verified == [])
         ok("a'zo emas: klaviatura yangilandi",
            len(cb.message.markups) == 1 and cb.message.markups[0] is not None)
-        ok("a'zo emas: menyu yuborilmadi", cb.message.answers == [])
+        ok("a'zo emas: menyu yuborilmadi",
+           "Assalomu alaykum" not in cb.message.answers[0]["text"])
     finally:
         restore()
 
