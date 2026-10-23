@@ -22,8 +22,17 @@ Render / Supabase uchun maxsus sozlamalar:
     URL'dan `sslmode` ajratilib, asyncpg'ning `ssl="require"` connect
     argumentiga aylantiriladi.
   * Supabase Transaction Pooler (port 6543) PgBouncer orqali ishlaydi va
-    prepared statement'larni qo'llab-quvvatlamaydi. Shu sababli shu portda
-    `statement_cache_size=0` beriladi (asyncpg statement cache'i o'chadi).
+    prepared statement'larni qo'llab-quvvatlamaydi. Shu sababli pooler'da
+    IKKI kesh ham o'chiriladi:
+        - `statement_cache_size=0`          — asyncpg'ning o'z keshi;
+        - `prepared_statement_cache_size=0` — SQLAlchemy asyncpg dialektining
+          keshi (standart 100 ta statement). Faqat birinchisini o'chirish
+          yetarli emas: SQLAlchemy statement'larni `prepare()` qilib keshlaydi
+          va PgBouncer ularni boshqa backend ulanishda topa olmaydi
+          ("prepared statement ... does not exist" / "already exists").
+  * Pooler'da pool hajmi ham cheklanadi (pool_size=2, max_overflow=13 ->
+    jami 15 ulanish), chunki Supabase pooler'i ortiqcha client ulanishlarni
+    navbatga qo'yadi va so'rovlar timeout bo'lishi mumkin.
   * SSL (TLS) Supabase'da majburiy: `ssl="require"` avtomatik yoqiladi.
 
 Ishlatish (asosiy):
@@ -70,6 +79,19 @@ SUPABASE_TRANSACTION_POOLER_PORT = 6543
 
 # Supabase hostlarida TLS (SSL) majburiy — ulanish `ssl="require"` bilan.
 SUPABASE_HOST_MARKERS = ("supabase.co", "supabase.com")
+
+# Supabase Connection Pooler hostlari (PgBouncer). Host bo'yicha ham
+# aniqlaymiz — ba'zan URL'da port ko'rsatilmagan bo'ladi.
+SUPABASE_POOLER_HOST_MARKERS = ("pooler.supabase.com",)
+
+# Pooler uchun pool hajmi: min_size=2 ... max_size=15
+# (PgBouncer ortiqcha client ulanishlarni navbatga qo'yadi -> timeout)
+POOLER_POOL_SIZE = 2
+POOLER_MAX_OVERFLOW = 13        # 2 + 13 = 15 (maksimal ulanish)
+
+# To'g'ridan-to'g'ri (Direct) ulanish uchun pool hajmi
+DIRECT_POOL_SIZE = 10
+DIRECT_MAX_OVERFLOW = 20        # 10 + 20 = 30 (maksimal ulanish)
 
 
 # -------------------------------------------------------------
@@ -125,6 +147,24 @@ def _is_supabase_host(host: str | None) -> bool:
         return False
     hostname = host.split(":")[0].lower()
     return any(marker in hostname for marker in SUPABASE_HOST_MARKERS)
+
+
+def _is_pooler(host: str | None, port: int | None) -> bool:
+    """
+    Ulanish Supabase Connection Pooler (PgBouncer) orqali ketayotganini
+    aniqlaydi.
+
+    Belgilari:
+      * port == 6543 (Transaction Pooler);
+      * host `*.pooler.supabase.com` (port 5432 — Session Pooler ham shu
+        hostda; unda ham keshlarni o'chirish xavfsiz).
+    """
+    if port == SUPABASE_TRANSACTION_POOLER_PORT:
+        return True
+    if not host:
+        return False
+    hostname = host.split(":")[0].lower()
+    return any(marker in hostname for marker in SUPABASE_POOLER_HOST_MARKERS)
 
 
 def _resolve_ssl(
@@ -201,15 +241,20 @@ def _build_database_config(raw_url: str) -> tuple[str, dict[str, object]]:
     if ssl_value is not None:
         connect_args["ssl"] = ssl_value
 
-    # --- Supabase Transaction Pooler (PgBouncer) ---
+    # --- Supabase Connection Pooler (PgBouncer) ---
     try:
         port = parts.port
     except ValueError:  # noto'g'ri port — xato URL
         port = None
-    if port == SUPABASE_TRANSACTION_POOLER_PORT:
-        # PgBouncer prepared statement'ni qayta ishlatmaydi:
-        # "prepared statement ... already exists" xatosining oldini oladi.
+    if _is_pooler(parts.hostname, port):
+        # PgBouncer prepared statement'larni backend ulanishlar orasida
+        # saqlamaydi. Ikki keshni ham o'chiramiz:
+        #   1) asyncpg'ning o'z keshi (asyncpg.connect kwarg'i);
+        #   2) SQLAlchemy asyncpg dialektining keshi (DBAPI argument).
+        # Aks holda: "prepared statement __asyncpg_stmt_N__ does not exist"
+        # yoki "... already exists" -> SQLAlchemyError.
         connect_args["statement_cache_size"] = 0
+        connect_args["prepared_statement_cache_size"] = 0
 
     # --- Qayta yig'ilgan URL ---
     async_url = urlunsplit(
@@ -218,40 +263,69 @@ def _build_database_config(raw_url: str) -> tuple[str, dict[str, object]]:
     return async_url, connect_args
 
 
+def _pool_settings(raw_url: str) -> dict[str, int]:
+    """
+    URL turiga qarab pool hajmini tanlaydi.
+
+    Pooler (PgBouncer) uchun kichik pool: 2 + 13 = 15 ta ulanish
+    (Supabase pooler'i ortiqcha client ulanishlarni navbatga qo'yadi).
+    To'g'ridan-to'g'ri ulanish uchun: 10 + 20 = 30 ta.
+    """
+    parts = urlsplit(_normalize_scheme(raw_url))
+    try:
+        port = parts.port
+    except ValueError:  # noto'g'ri port — xato URL
+        port = None
+
+    if _is_pooler(parts.hostname, port):
+        return {
+            "pool_size": POOLER_POOL_SIZE,
+            "max_overflow": POOLER_MAX_OVERFLOW,
+        }
+    return {
+        "pool_size": DIRECT_POOL_SIZE,
+        "max_overflow": DIRECT_MAX_OVERFLOW,
+    }
+
+
 def _create_engine() -> AsyncEngine:
     """
     Supabase uchun asinxron engine yaratadi (pool sozlamalari bilan).
 
-    Pool siyosati izohlanganidek:
-      * pool_size=10      - lazim bo'lganda 10 ta doimiy ulanish saqlanadi.
-      * max_overflow=20   - bosim ostida yana 20 ta ulanish ochiladi (jami 30).
+    Pool siyosati:
+      * pool_size / max_overflow — pooler'da 2 + 13 = 15, to'g'ridan-to'g'ri
+        ulanishda 10 + 20 = 30 (`_pool_settings`).
       * pool_recycle=300  - 5 daqiqadan eski ulanish yangilanadi (dead connections).
       * pool_pre_ping=True - ulanish olishdan oldin bazaga "SELECT 1" yuboriladi.
 
     Qo'shimcha (Render/Supabase):
-      * `ssl="require"`               — TLS ulanish (Supabase uchun majburiy).
-      * `statement_cache_size=0`      — Transaction Pooler (port 6543) uchun.
+      * `ssl="require"`                    — TLS ulanish (majburiy).
+      * `statement_cache_size=0`           — asyncpg keshi (pooler uchun).
+      * `prepared_statement_cache_size=0`  — SQLAlchemy dialekti keshi (pooler).
     """
     async_url, connect_args = _build_database_config(settings.DATABASE_URL)
+    pool_settings = _pool_settings(settings.DATABASE_URL)
 
     engine = create_async_engine(
         async_url,
         echo=False,                 # True qilsangiz SQL so'rovlari logga chiqadi
         future=True,                # SQLAlchemy 2.0 uslubidagi API
-        pool_size=10,               # doimiy ochiq ulanishlar soni
-        max_overflow=20,            # qo'shimcha ulanishlar (jami 10 + 20 = 30)
+        pool_size=pool_settings["pool_size"],          # doimiy ulanishlar
+        max_overflow=pool_settings["max_overflow"],    # qo'shimcha ulanishlar
         pool_recycle=300,           # 300 soniyadan so'ng ulanishni yangilash
         pool_pre_ping=True,         # ulanishdan oldin sog'liqni tekshirish
         pool_use_lifo=True,         # oxirgi ishlatilgan ulanishni birinchi qaytaradi
                                     # (eski ulanishlar uzoq yotib qolmasligi uchun)
-        connect_args=connect_args,  # ssl="require", statement_cache_size=0
+        connect_args=connect_args,  # ssl, statement caches
     )
     logger.info(
-        "PostgreSQL async engine yaratildi (Supabase). connect_args=%s",
-        connect_args or "-",
+        "PostgreSQL async engine yaratildi (Supabase). pool=%s+%s, connect_args=%s",
+        pool_settings["pool_size"], pool_settings["max_overflow"],
+        sorted(connect_args) or "-",
     )
     # connect_args bo'sh bo'lsa (lokal Postgres, SSLsiz) — hech narsa qo'shimcha
-    # kerak emas; Supabase'da esa 'ssl' va 'statement_cache_size' ko'rinadi.
+    # kerak emas; Supabase pooler'ida esa 'ssl', 'statement_cache_size' va
+    # 'prepared_statement_cache_size' ko'rinadi.
     return engine
 
 
