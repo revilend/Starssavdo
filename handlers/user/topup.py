@@ -215,11 +215,16 @@ async def _begin_card_topup(target: Message, state: FSMContext) -> None:
 
 
 async def _begin_direct_card_topup(target: Message, state: FSMContext) -> None:
-    """💳 Balans to'ldirish tugmasi bosilganda to'g'ridan-to'g'ri karta yo'nalishiga o'tadi."""
+    """💳 Balans to'ldirish tugmasi bosilganda to'g'ridan-to'g'ri karta yo'nalishiga o'tadi.
+
+    Karta rekvizitlari kiritilmagan bo'lsa — oqim to'xtamaydi: usullar menyusi
+    ochiladi va foydalanuvchiga ⚡️ avtomatik (XTR) to'lov taklif qilinadi.
+    """
     number, holder = await _card_details()
     if not number:
+        # Karta kiritilmagan — usullar menyusiga tushaymiz (avtomatik to'lov ochiq).
         await state.clear()
-        await target.answer(NO_CARD_TEXT, parse_mode="HTML")
+        await _begin_topup(target, state)
         return
 
     user_id = _user_id_of(target)
@@ -238,7 +243,9 @@ async def _begin_direct_card_topup(target: Message, state: FSMContext) -> None:
         f"👤 Karta egasi: <b>Raximov D</b>\n\n"
         "Qancha Stars miqdorini to'ldirmoqchisiz?\n"
         "Pastdagi tugmalardan tanlang yoki miqdorni yozing (masalan: <code>100</code>).\n\n"
-        "🧾 To'lovni amalga oshirib, chekni (skrinshot) yuborishingiz mumkin.",
+        "🧾 To'lovni amalga oshirib, chekni (skrinshot) yuborishingiz mumkin.\n\n"
+        "⚡️ Muqobil usul: <b>Avtomatik to'lov</b> — Telegram Stars (XTR) "
+        "bilan bir zumda balans to'ldirish ham mumkin.",
         parse_mode="HTML",
         reply_markup=get_topup_presets_kb(),
     )
