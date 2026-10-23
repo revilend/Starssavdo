@@ -167,13 +167,15 @@ async def guide_menu(message: Message, state: FSMContext | None = None) -> None:
 @router.callback_query(F.data == CB_TX_HISTORY)
 async def tx_history(callback: CallbackQuery, state: FSMContext | None = None) -> None:
     """📜 Oxirgi 10 tranzaksiyani ko'rsatadi."""
+    # Spinner DARHOL yopiladi — DB so'rovi kechiksa ham tugma "o'lik" ko'rinmaydi.
+    await callback.answer()
+
     if state is not None:
         await state.clear()
 
     transactions = await UserRepository.get_recent_transactions(
         callback.from_user.id, limit=10
     )
-    await callback.answer()
 
     if not transactions:
         await callback.message.answer(EMPTY_HISTORY_TEXT, parse_mode="HTML")

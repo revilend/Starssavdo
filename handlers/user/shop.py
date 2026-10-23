@@ -147,6 +147,10 @@ ALERT_CATEGORY_NOT_FOUND = "❌ Toifa topilmadi!"
 ALERT_INVOICE_FAILED = "❌ Invoysni yuborib bo'lmadi! Keyinroq urinib ko'ring."
 ALERT_PURCHASE_FAILED = "❌ Xaridni amalga oshirib bo'lmadi! Keyinroq urinib ko'ring."
 
+# "Mayda Giftlar" reply tugmasini moslashuvchan aniqlash uchun kalit so'zlar.
+# `is_gift_text()` matnni lower() qilib tekshiradi — emoji va registr muhim emas.
+GIFT_KEYWORDS: tuple[str, ...] = ("gift", "sovg'a", "sovga", "mayda")
+
 # Balans yetarli bo'lmaganda yuboriladigan xabar (pastda to'ldirish tugmasi)
 NOT_ENOUGH_BALANCE_TEXT = (
     "❌ <b>Balansingizda Stars yetarli emas!</b>\n\n"
@@ -226,8 +230,19 @@ async def cmd_shop(message: Message, state: FSMContext | None = None) -> None:
     await shop_menu(message, state)
 
 
+def is_gift_text(message: Message) -> bool:
+    """
+    "Mayda Giftlar" tugmasi matni — emoji bilan yoki emojisiz.
+
+    Registrga bog'liq emas: "🎁 Mayda Giftlar", "mayda giftlar",
+    "Mayda sovg'alar", "sovga kerak" — hammasi gift bo'limini ochadi.
+    """
+    text = (message.text or "").lower()
+    return any(word in text for word in GIFT_KEYWORDS)
+
+
 @router.message(StateFilter("*"), ButtonText("menu_gifts"))
-@router.message(StateFilter("*"), F.text.contains("Mayda Giftlar"))
+@router.message(StateFilter("*"), is_gift_text)
 async def gifts_menu(message: Message, state: FSMContext | None = None) -> None:
     """🎁 Mayda Giftlar — to'g'ridan-to'g'ri gift toifasini ko'rsatadi."""
     if state is not None:
@@ -314,14 +329,17 @@ async def shop_category(
     callback: CallbackQuery, state: FSMContext | None = None
 ) -> None:
     """Tanlangan toifadagi faol mahsulotlar (nom, narx, tavsif)."""
-    category = (callback.data or "")[len("cat_"):].strip()
-    if category not in PRODUCT_CATEGORIES:
-        await callback.answer(ALERT_CATEGORY_NOT_FOUND, show_alert=True)
-        return
+    # Spinner DARHOL yopiladi — DB so'rovi tugmani kutdirmaydi
+    await callback.answer()
 
     if state is not None:
         await state.clear()
-    await callback.answer()
+
+    category = (callback.data or "")[len("cat_"):].strip()
+    if category not in PRODUCT_CATEGORIES:
+        await callback.message.answer(ALERT_CATEGORY_NOT_FOUND)
+        return
+
     await _send_category_view(callback.message, category)
     logger.info(
         "Toifa ko'rsatildi: user=%s category=%s",
@@ -337,9 +355,9 @@ async def shop_categories_callback(
     callback: CallbackQuery, state: FSMContext | None = None
 ) -> None:
     """`shop_categories` — mahsulotlar ro'yxatidan toifalarga qaytaradi."""
+    await callback.answer()
     if state is not None:
         await state.clear()
-    await callback.answer()
 
     try:
         await callback.message.edit_text(
@@ -481,19 +499,21 @@ async def order_product(
     callback: CallbackQuery, state: FSMContext | None = None
 ) -> None:
     """Mahsulot tanlandi — UZS buyurtma yoki qo'shimcha ma'lumot so'rash."""
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
+    await callback.answer()
+
+    if state is not None:
+        await state.clear()
+
     product_id = _parse_product_id(callback.data or "", CB_ORDER_PREFIX)
     if product_id is None:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active or product.price_uzs <= 0:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
-
-    await callback.answer()
-    if state is not None:
-        await state.clear()
 
     price = format_som(product.price_uzs)
     if product.category == "premium":
@@ -565,34 +585,35 @@ async def order_wallet(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data == "order_flow_cancel")
+@router.callback_query(StateFilter("*"), F.data == "order_flow_cancel")
 async def order_flow_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     """Premium/NFT ma'lumot kiritishni bekor qiladi."""
-    await state.clear()
     await callback.answer("Bekor qilindi")
+    await state.clear()
     try:
         await callback.message.edit_text(ORDER_CANCELLED_TEXT)
     except (TelegramBadRequest, AttributeError):
         await callback.message.answer(ORDER_CANCELLED_TEXT)
 
 
-@router.callback_query(F.data.startswith(CB_ORDER_CANCEL_PREFIX))
+@router.callback_query(StateFilter("*"), F.data.startswith(CB_ORDER_CANCEL_PREFIX))
 async def order_cancel(callback: CallbackQuery) -> None:
     """Faol buyurtmani bekor qiladi."""
+    # Spinner DARHOL yopiladi (DB so'rovidan oldin)
+    await callback.answer()
+
     raw = (callback.data or "")[len(CB_ORDER_CANCEL_PREFIX):].strip()
     if not raw.isdigit():
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     order = await OrderRepository.cancel_order(int(raw), callback.from_user.id)
     if order is None:
-        await callback.answer(
-            "Buyurtma allaqachon yopilgan (to'langan yoki bekor qilingan).",
-            show_alert=True,
+        await callback.message.answer(
+            "⚠️ Buyurtma allaqachon yopilgan (to'langan yoki bekor qilingan)."
         )
         return
 
-    await callback.answer("Bekor qilindi")
     try:
         await callback.message.edit_text(ORDER_CANCELLED_TEXT)
     except (TelegramBadRequest, AttributeError):
@@ -614,30 +635,27 @@ async def _purchase_with_balance(
     """
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     # UZS katalogidagi mahsulotlar (price_xtr=0) faqat HUMO karta orqali
     # to'lanadi. Eski tugma orqali ularni "bepul" olishning oldini olamiz.
     if product.price_xtr <= 0:
-        await callback.answer(
+        await callback.message.answer(
             "💳 Bu mahsulot faqat HUMO karta orqali to'lanadi. "
-            "Do'kondan qayta tanlang.",
-            show_alert=True,
+            "Do'kondan qayta tanlang."
         )
         return
 
     user_id = callback.from_user.id
     user = await UserRepository.get_user(user_id)
     if user is None:
-        await callback.answer(
-            "❌ Profilingiz topilmadi! /start buyrug'ini bosing.",
-            show_alert=True,
+        await callback.message.answer(
+            "❌ Profilingiz topilmadi! /start buyrug'ini bosing."
         )
         return
 
     if user.stars_balance < product.price_xtr:
-        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
         await callback.message.answer(
             NOT_ENOUGH_BALANCE_TEXT.format(
                 price=product.price_xtr,
@@ -654,7 +672,6 @@ async def _purchase_with_balance(
         order = await OrderRepository.create_balance_order(user_id, product.id)
     except InsufficientBalanceError:
         # Parallel sarf — balans shu oraliqda kamaygan bo'lishi mumkin
-        await callback.answer(ALERT_NOT_ENOUGH_BALANCE, show_alert=True)
         await callback.message.answer(
             NOT_ENOUGH_BALANCE_TEXT.format(
                 price=product.price_xtr,
@@ -670,11 +687,10 @@ async def _purchase_with_balance(
             "Balans xaridi amalga oshmadi: user=%s product=%s",
             user_id, product.id,
         )
-        await callback.answer(ALERT_PURCHASE_FAILED, show_alert=True)
+        await callback.message.answer(ALERT_PURCHASE_FAILED)
         return
 
     new_balance = user.stars_balance - product.price_xtr
-    await callback.answer("✅ Xarid muvaffaqiyatli!")
     await callback.message.answer(
         BALANCE_RECEIPT_TEXT.format(
             order_id=order.id,
@@ -709,12 +725,15 @@ async def buy_product(
     callback: CallbackQuery, state: FSMContext | None = None
 ) -> None:
     """Mahsulot tanlandi — darhol bot balansidan sotib olinadi."""
+    # Spinner DARHOL yopiladi (DB so'rovlaridan oldin)
+    await callback.answer()
+
     if state is not None:
         await state.clear()
 
     product_id = _parse_product_id(callback.data or "", "buy_prod_")
     if product_id is None:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     await _purchase_with_balance(callback, product_id)
@@ -723,25 +742,27 @@ async def buy_product(
 # =============================================================
 # 4. RASMIY TELEGRAM STARS (XTR) ORQALI TO'LOV
 # =============================================================
-@router.callback_query(F.data.startswith(CB_PAY_XTR_PREFIX))
+@router.callback_query(StateFilter("*"), F.data.startswith(CB_PAY_XTR_PREFIX))
 async def pay_with_xtr(callback: CallbackQuery) -> None:
     """Pending buyurtma yaratadi va rasmiy XTR invoicesini yuboradi."""
+    # Spinner DARHOL yopiladi (DB/Telegram so'rovlaridan oldin)
+    await callback.answer()
+
     product_id = _parse_product_id(callback.data or "", CB_PAY_XTR_PREFIX)
     if product_id is None:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     product = await ProductRepository.get_product_by_id(product_id)
     if product is None or not product.is_active:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     # UZS katalogidagi mahsulotlar uchun eski XTR invoysi yaroqsiz
     if product.price_xtr <= 0:
-        await callback.answer(
+        await callback.message.answer(
             "💳 Bu mahsulot faqat HUMO karta orqali to'lanadi. "
-            "Do'kondan qayta tanlang.",
-            show_alert=True,
+            "Do'kondan qayta tanlang."
         )
         return
 
@@ -763,7 +784,7 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
         logger.exception(
             "Buyurtma yaratilmadi: user=%s product=%s", user_id, product.id
         )
-        await callback.answer(ALERT_PURCHASE_FAILED, show_alert=True)
+        await callback.message.answer(ALERT_PURCHASE_FAILED)
         return
 
     # Invoys yuboriladi (Telegram Stars balansi bilan to'lov)
@@ -780,10 +801,8 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
         logger.exception(
             "Invoys yuborilmadi: user=%s order=%s", user_id, order.id
         )
-        await callback.answer(ALERT_INVOICE_FAILED, show_alert=True)
+        await callback.message.answer(ALERT_INVOICE_FAILED)
         return
-
-    await callback.answer("⭐️ To'lov sahifasi yuborildi ✅")
     logger.info(
         "XTR invoys yuborildi: user=%s order=%s product=%s amount=%s",
         user_id, order.id, product.id, product.price_xtr,
@@ -919,12 +938,15 @@ async def on_successful_payment(message: Message) -> None:
 # =============================================================
 # 5. BOT BALANSI ORQALI XARID (eski "pay_balance_" tugmalari uchun)
 # =============================================================
-@router.callback_query(F.data.startswith(CB_PAY_BALANCE_PREFIX))
+@router.callback_query(StateFilter("*"), F.data.startswith(CB_PAY_BALANCE_PREFIX))
 async def pay_with_balance(callback: CallbackQuery) -> None:
     """Bot balansidan xarid — `_purchase_with_balance` orqali."""
+    # Spinner DARHOL yopiladi (DB so'rovlaridan oldin)
+    await callback.answer()
+
     product_id = _parse_product_id(callback.data or "", CB_PAY_BALANCE_PREFIX)
     if product_id is None:
-        await callback.answer(ALERT_PRODUCT_NOT_FOUND, show_alert=True)
+        await callback.message.answer(ALERT_PRODUCT_NOT_FOUND)
         return
 
     await _purchase_with_balance(callback, product_id)

@@ -109,6 +109,9 @@ async def _notify_admins(bot, withdrawal, user) -> None:
 @router.callback_query(F.data == CB_WITHDRAW_START)
 async def withdraw_start(callback: CallbackQuery, state: FSMContext) -> None:
     """Balans va minimal miqdor tekshiruvidan keyin miqdor so'raydi."""
+    # Spinner DARHOL yopiladi — DB so'rovlari kechiksa ham tugma javob beradi.
+    await callback.answer()
+
     user = callback.from_user
     user_id = user.id
 
@@ -122,9 +125,9 @@ async def withdraw_start(callback: CallbackQuery, state: FSMContext) -> None:
     balance = db_user.stars_balance if db_user else 0
 
     if balance < min_withdrawal:
-        await callback.answer(
-            f"Balans yetarli emas — kamida {min_withdrawal}⭐️ kerak",
-            show_alert=True,
+        # Callback allaqachon javob bergan — alert o'rniga xabar yuboriladi.
+        await callback.message.answer(
+            f"❌ Balans yetarli emas — kamida {min_withdrawal}⭐️ kerak"
         )
         return
 
@@ -137,7 +140,6 @@ async def withdraw_start(callback: CallbackQuery, state: FSMContext) -> None:
         parse_mode="HTML",
         reply_markup=_cancel_kb(),
     )
-    await callback.answer()
 
 
 # =============================================================

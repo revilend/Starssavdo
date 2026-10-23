@@ -168,6 +168,17 @@ def create_bot() -> Bot:
     )
 
 
+# Telegram'ga qaysi update turlarini so'rashimiz (set_webhook / getUpdates).
+# `callback_query` BU RO'YXATDA BO'LMASA inline tugmalar bosilganda update
+# umuman kelmaydi — tugmalar "javob bermayapti" bo'lib ko'rinadi.
+# `pre_checkout_query` esa Telegram Stars (XTR) to'lovini tasdiqlash uchun shart.
+ALLOWED_UPDATES: list[str] = [
+    "message",
+    "callback_query",
+    "pre_checkout_query",
+]
+
+
 def create_dispatcher() -> Dispatcher:
     """Dispatcher (FSM: MemoryStorage) yaratadi va routerlarni ulaydi."""
     dp = Dispatcher(storage=MemoryStorage())
@@ -261,13 +272,13 @@ async def _start_webhook() -> None:
         url=url,
         drop_pending_updates=True,
         secret_token=settings.WEBHOOK_SECRET or None,
-        allowed_updates=dp.resolve_used_update_types(),
+        allowed_updates=ALLOWED_UPDATES,
     )
     logger.info(
         "Webhook o'rnatildi: %s (secret_token=%s, allowed_updates=%s)",
         url,
         "ha" if settings.WEBHOOK_SECRET else "yo'q",
-        dp.resolve_used_update_types(),
+        ALLOWED_UPDATES,
     )
     if not settings.WEBHOOK_SECRET:
         logger.warning(
@@ -297,7 +308,7 @@ async def _start_polling() -> asyncio.Task[None]:
     task = asyncio.create_task(
         dp.start_polling(
             bot,
-            allowed_updates=dp.resolve_used_update_types(),
+            allowed_updates=ALLOWED_UPDATES,
             handle_signals=False,
             close_bot_session=False,
         ),

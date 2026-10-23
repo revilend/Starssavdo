@@ -30,7 +30,14 @@ from keyboards import (  # noqa: E402
     get_subscription_kb,
     get_withdrawal_decision_kb,
 )
-from keyboards.reply import BTN_ADMIN, BTN_SHOP, MAIN_MENU_TEXTS  # noqa: E402
+from keyboards.reply import (  # noqa: E402
+    BTN_ADMIN,
+    BTN_BALANCE,
+    BTN_GIFTS,
+    BTN_REFER,
+    BTN_SHOP,
+    MAIN_MENU_TEXTS,
+)
 
 PASSED = 0
 
@@ -63,9 +70,10 @@ def main() -> None:
     ok("is_persistent=True", kb.is_persistent is True)
     r = rows(kb)
     ok("foydalanuvchi: 4 qator", len(r) == 4, str(len(r)))
-    ok("1-qator: Do'kon + Balansim", r[0][0].text == BTN_SHOP and r[0][1].text == "⭐️ Balansim")
+    ok("1-qator: Do'kon + Balansim",
+       r[0][0].text == BTN_SHOP and r[0][1].text == BTN_BALANCE)
     ok("2-qator: Taklif + Giftlar",
-       r[1][0].text == "👥 Do'stlarni taklif qilish" and r[1][1].text == "🎁 Mayda Giftlar")
+       r[1][0].text == BTN_REFER and r[1][1].text == BTN_GIFTS)
     ok("3-qator: Balans to'ldirish", [b.text for b in r[2]] == ["💳 Balans to'ldirish"])
     ok("4-qator: Qo'llanma", [b.text for b in r[3]] == ["ℹ️ Qo'llanma"])
     ok("oddiy foydalanuvchida Admin yo'q", all(b.text != BTN_ADMIN for row in r for b in row))
@@ -104,7 +112,7 @@ def main() -> None:
     texts = [b.text for b in flat]
     ok("5 ta tugma", len(flat) == 5, str(texts))
     ok("toifa matnlari", texts[:4] == ["⭐️ Stars xarid qilish", "💎 Telegram Premium",
-                                       "🖼 Telegram NFT", "🎁 Mayda Giftlar"])
+                                       "🖼 Telegram NFT", BTN_GIFTS], texts[:4])
     ok("toifa callbacklari", [b.callback_data for b in flat[:4]] ==
        ["cat_stars", "cat_premium", "cat_nft", "cat_gift"])
     ok("orqaga tugmasi", texts[4] == "◀️ Orqaga" and flat[4].callback_data == "back_to_menu")

@@ -305,6 +305,11 @@ def test_shop_menu():
     run(case())
 
 
+def answered_first(cb: "FakeCallback") -> bool:
+    """Handler callback'ga DARHOL (I/O dan oldin) javob berganini tekshiradi."""
+    return bool(cb.answers) and cb.answers[0] == {"text": None, "show_alert": False}
+
+
 def test_shop_category():
     print("== D. cat_ toifasi ==")
     prods = {1: make_product(1), 2: make_product(2, "premium", "3 oy Premium",
@@ -321,6 +326,8 @@ def test_shop_category():
            and "Eng mashhur to&#x27;plam" in a[0]["text"], a[0]["text"])
         cbs = kb_callbacks(a[0]["reply_markup"])
         ok("ord_prod tugmasi", "ord_prod_1" in cbs, str(cbs))
+        ok("toifa: spinner DARHOL yopildi (DB so'rovidan oldin)",
+           answered_first(cb), str(cb.answers))
 
         # rasmli mahsulot — foto sifatida (caption bilan) yuboriladi
         prods[3] = make_product(3, "gift", "Rasmli gift", "Rasmli sovg'a", 50,
@@ -340,12 +347,12 @@ def test_shop_category():
         ok("bo'sh toifa matni",
            "Hozircha bu bo'limda mahsulot yo'q" in cb2.message.answers[0]["text"])
 
-        # notanish toifa
+        # notanish toifa — alert emas, xabar (callback allaqachon javob bergan)
         cb3 = FakeCallback(tg_user(555), "cat_hacker")
         await shop_mod.shop_category(cb3)
-        ok("notanish toifa -> alert",
-           cb3.answers[0]["show_alert"] is True
-           and cb3.answers[0]["text"] == shop_mod.ALERT_CATEGORY_NOT_FOUND)
+        ok("notanish toifa -> xabar",
+           answered_first(cb3)
+           and cb3.message.answers[-1]["text"] == shop_mod.ALERT_CATEGORY_NOT_FOUND)
 
     run(case())
     env.restore()
@@ -367,13 +374,14 @@ def test_buy_product():
         ok("chek matni", len(a) == 1
            and "100 Stars" in a[0]["text"] and "100 XTR" in a[0]["text"]
            and "Qolgan balans: 50 ⭐️" in a[0]["text"])
+        ok("buy_prod: spinner DARHOL yopildi", answered_first(cb))
 
         # mavjud bo'lmagan
         cb2 = FakeCallback(tg_user(555), "buy_prod_999")
         await shop_mod.buy_product(cb2)
-        ok("yo'q mahsulot -> alert",
-           cb2.answers[0]["show_alert"] is True
-           and cb2.answers[0]["text"] == shop_mod.ALERT_PRODUCT_NOT_FOUND)
+        ok("yo'q mahsulot -> xabar",
+           answered_first(cb2)
+           and cb2.message.answers[-1]["text"] == shop_mod.ALERT_PRODUCT_NOT_FOUND)
 
         # o'chirilgan
         env.restore()
@@ -381,14 +389,16 @@ def test_buy_product():
         cb3 = FakeCallback(tg_user(555), "buy_prod_5")
         await shop_mod.buy_product(cb3)
         env2.restore()
-        patch_done = cb3.answers[0]["show_alert"] is True
-        ok("o'chirilgan mahsulot -> alert", patch_done)
+        patch_done = (answered_first(cb3)
+                      and cb3.message.answers[-1]["text"]
+                      == shop_mod.ALERT_PRODUCT_NOT_FOUND)
+        ok("o'chirilgan mahsulot -> xabar", patch_done)
 
         # noto'g'ri format
         cb4 = FakeCallback(tg_user(555), "buy_prod_abc")
         await shop_mod.buy_product(cb4)
-        ok("noto'g'ri ID -> alert",
-           cb4.answers[0]["text"] == shop_mod.ALERT_PRODUCT_NOT_FOUND)
+        ok("noto'g'ri ID -> xabar",
+           cb4.message.answers[-1]["text"] == shop_mod.ALERT_PRODUCT_NOT_FOUND)
 
     run(case())
     env.restore()
@@ -412,8 +422,8 @@ def test_pay_xtr():
            and inv[0]["chat_id"] == 555, str(inv))
         ok("payload buyurtma bilan",
            inv[0]["payload"] == "order:101:555", inv[0]["payload"])
-        ok("javob", "To'lov sahifasi" in cb.answers[0]["text"]
-           and not cb.answers[0]["show_alert"])
+        ok("spinner DARHOL yopildi (invoysdan oldin)",
+           answered_first(cb), str(cb.answers))
 
     run(case())
     env.restore()
@@ -425,9 +435,9 @@ def test_pay_xtr():
     async def fail_case():
         cb = FakeCallback(tg_user(555), "pay_xtr_1")
         await shop_mod.pay_with_xtr(cb)
-        ok("invoys xatosi -> alert",
-           cb.answers[0]["show_alert"] is True
-           and cb.answers[0]["text"] == shop_mod.ALERT_INVOICE_FAILED)
+        ok("invoys xatosi -> xabar",
+           answered_first(cb)
+           and cb.message.answers[-1]["text"] == shop_mod.ALERT_INVOICE_FAILED)
 
     run(fail_case())
     env2.restore()
@@ -438,9 +448,9 @@ def test_pay_xtr():
     def fail_case2():
         cb = FakeCallback(tg_user(555), "pay_xtr_1")
         run(shop_mod.pay_with_xtr(cb))
-        ok("buyurtma xatosi -> alert",
-           cb.answers[0]["show_alert"] is True
-           and cb.answers[0]["text"] == shop_mod.ALERT_PURCHASE_FAILED)
+        ok("buyurtma xatosi -> xabar",
+           answered_first(cb)
+           and cb.message.answers[-1]["text"] == shop_mod.ALERT_PURCHASE_FAILED)
         ok("invoys yuborilmadi", len(env3.state.invoice_calls) == 0)
 
     fail_case2()
@@ -577,9 +587,7 @@ def test_pay_balance():
         ok("chek: mahsulot", "100 Stars" in a)
         ok("chek: bot balansi", "bot balansidan" in a and "100 XTR" in a)
         ok("chek: qolgan balans", "Qolgan balans: 50 ⭐️" in a, a)
-        ok("javob: muvaffaqiyat",
-           cb.answers[0]["text"] == "✅ Xarid muvaffaqiyatli!"
-           and not cb.answers[0]["show_alert"])
+        ok("spinner DARHOL yopildi", answered_first(cb), str(cb.answers))
 
     run(case())
     env.restore()
@@ -591,10 +599,11 @@ def test_pay_balance():
     async def poor_case():
         cb = FakeCallback(tg_user(555), "pay_balance_1")
         await shop_mod.pay_with_balance(cb)
-        ok("yetarli emas -> aniq alert matni",
-           cb.answers[0]["show_alert"] is True
-           and cb.answers[0]["text"] == shop_mod.ALERT_NOT_ENOUGH_BALANCE,
-           str(cb.answers))
+        ok("yetarli emas -> hisob-kitob xabari",
+           answered_first(cb)
+           and "Balansingizda Stars yetarli emas" in cb.message.answers[-1]["text"]
+           and "Yetishmayapti: <b>70 ⭐️</b>" in cb.message.answers[-1]["text"],
+           str(cb.message.answers))
         ok("xarid chaqirilmadi", env2.state.balance_order_calls == [])
         ok("to'ldirish tugmasi yuborildi",
            len(cb.message.answers) == 1
@@ -613,9 +622,9 @@ def test_pay_balance():
     async def race_case():
         cb = FakeCallback(tg_user(555), "pay_balance_1")
         await shop_mod.pay_with_balance(cb)
-        ok("race InsufficientBalanceError -> alert",
-           cb.answers[0]["show_alert"] is True
-           and cb.answers[0]["text"] == shop_mod.ALERT_NOT_ENOUGH_BALANCE)
+        ok("race InsufficientBalanceError -> xabar",
+           answered_first(cb)
+           and "Balansingizda Stars yetarli emas" in cb.message.answers[-1]["text"])
 
     run(race_case())
     env3.restore()
@@ -627,9 +636,9 @@ def test_pay_balance():
     async def err_case():
         cb = FakeCallback(tg_user(555), "pay_balance_1")
         await shop_mod.pay_with_balance(cb)
-        ok("RepositoryError -> alert",
-           cb.answers[0]["show_alert"] is True
-           and cb.answers[0]["text"] == shop_mod.ALERT_PURCHASE_FAILED)
+        ok("RepositoryError -> xabar",
+           answered_first(cb)
+           and cb.message.answers[-1]["text"] == shop_mod.ALERT_PURCHASE_FAILED)
 
     run(err_case())
     env4.restore()
@@ -640,9 +649,9 @@ def test_pay_balance():
     async def nouser_case():
         cb = FakeCallback(tg_user(555), "pay_balance_1")
         await shop_mod.pay_with_balance(cb)
-        ok("user topilmadi -> /start alert",
-           cb.answers[0]["show_alert"] is True
-           and "/start" in cb.answers[0]["text"])
+        ok("user topilmadi -> /start xabari",
+           answered_first(cb)
+           and "/start" in cb.message.answers[-1]["text"])
 
     run(nouser_case())
     env5.restore()
@@ -653,8 +662,8 @@ def test_pay_balance():
     async def off_case():
         cb = FakeCallback(tg_user(555), "pay_balance_3")
         await shop_mod.pay_with_balance(cb)
-        ok("o'chirilgan mahsulot -> alert",
-           cb.answers[0]["text"] == shop_mod.ALERT_PRODUCT_NOT_FOUND)
+        ok("o'chirilgan mahsulot -> xabar",
+           cb.message.answers[-1]["text"] == shop_mod.ALERT_PRODUCT_NOT_FOUND)
 
     run(off_case())
     env6.restore()
