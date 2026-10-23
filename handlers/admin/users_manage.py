@@ -42,7 +42,7 @@ from database.queries import (
     SettingsRepository,
     UserRepository,
 )
-from keyboards.builders import CB_ADM_BALANCE_EDIT, CB_ADM_REF_PRICE
+from keyboards.builders import CB_ADM_BALANCE_EDIT, CB_ADM_CARD, CB_ADM_REF_PRICE
 from states.admin_states import (
     ChangeSettingsStates,
     ManualBalanceStates,
@@ -337,6 +337,19 @@ async def set_card_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.answer(
         ASK_CARD_NUMBER_TEXT.format(current=number or "kiritilmagan")
     )
+
+
+@router.callback_query(F.data == CB_ADM_CARD)
+async def card_from_panel(callback: CallbackQuery, state: FSMContext) -> None:
+    """
+    [ 💳 Karta ma'lumotlari ] — panelning alohida tugmasi.
+
+    To'g'ridan-to'g'ri karta rekvizitlari oqimini ochadi (raqam → egasi).
+    Saqlangan raqam keyinchalik foydalanuvchining '💳 Balans to'ldirish'
+    ekranida aynan shunday ko'rsatiladi.
+    """
+    await state.clear()
+    await set_card_start(callback, state)
 
 
 @router.message(PaymentCardStates.waiting_for_number, F.text)

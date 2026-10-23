@@ -6,7 +6,10 @@ handlers/user/shop.py
 
 Oqimlar:
  1. "🛍 Do'kon" — do'kon kirish sahifasi + toifalar klaviaturasi.
- 2. `cat_{category}` — bazadagi faol mahsulotlar (nom, narx, tavsif).
+ 2. `cat_{category}` — bazadagi faol mahsulotlar (nom, narx, tavsif);
+    toifada `image_file_id` (admin kiritgan rasm) bo'lsa, ro'yxat
+    shu rasmning captioni sifatida yuboriladi (rasm yuborib bo'lmasa
+    — matn qaytariladi).
  3. `buy_prod_{product_id}` — mahsulot tafsilotlari + usul tanlash:
       ⭐️ Rasmiy Telegram Stars (XTR) bilan to'lash
       💳 Botdagi balansimdan yechish
@@ -220,8 +223,7 @@ async def gifts_menu(message: Message, state: FSMContext | None = None) -> None:
     """🎁 Mayda Giftlar — to'g'ridan-to'g'ri gift toifasini ko'rsatadi."""
     if state is not None:
         await state.clear()
-    text, markup = await _category_view("gift")
-    await message.answer(text, parse_mode="HTML", reply_markup=markup)
+    await _send_category_view(message, "gift")
     logger.info(
         "Giftlar bo'limi ochildi: user=%s",
         message.from_user.id if message.from_user else "?",
@@ -231,8 +233,13 @@ async def gifts_menu(message: Message, state: FSMContext | None = None) -> None:
 # =============================================================
 # 2. TOIFA — MAHSULOTLAR RO'YXATI
 # =============================================================
-async def _category_view(category: str) -> tuple[str, Any]:
-    """Toifa uchun (matn, klaviatura) tayyorlaydi — callback va reply uchun."""
+async def _category_view(category: str) -> tuple[str, Any, str | None]:
+    """
+    Toifa uchun (matn, klaviatura, rasm) tayyorlaydi — callback va reply uchun.
+
+    Uchinchi qiymat — toifadagi birinchi mahsulotning `image_file_id` si
+    (rasm yuborilsa, ro'yxat shu rasmning izohi sifatida chiqadi).
+    """
     products = await ProductRepository.get_products_by_category(category)
     category_title = CATEGORY_TITLES.get(category, CATEGORY_EMOJI.get(category, "🛍"))
 
@@ -240,6 +247,7 @@ async def _category_view(category: str) -> tuple[str, Any]:
         return (
             EMPTY_CATEGORY_TEXT.format(category_title=category_title),
             get_shop_categories_kb(),
+            None,
         )
 
     lines: list[str] = []
@@ -256,7 +264,34 @@ async def _category_view(category: str) -> tuple[str, Any]:
         f"{category_title}\n\n" + "\n".join(lines) +
         "\n\nXarid qilish uchun tugmani bosing 👇"
     )
-    return text, get_products_list_kb(products, category)
+    # Rasm: caption chegarasi (1024) uchun faqat qisqa matnda
+    image_file_id = next(
+        (p.image_file_id for p in products if p.image_file_id), None
+    )
+    if image_file_id and len(text) > 1000:
+        image_file_id = None
+    return text, get_products_list_kb(products, category), image_file_id
+
+
+async def _send_category_view(target: Any, category: str) -> None:
+    """Tayyorlangani ko'rinishni yuboradi (rasm bo'lsa foto, aks holda matn)."""
+    text, markup, image_file_id = await _category_view(category)
+    if image_file_id and hasattr(target, "answer_photo"):
+        try:
+            await target.answer_photo(
+                photo=image_file_id,
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+            return
+        except (TelegramAPIError, AttributeError):
+            # Rasm eskirgan yoki chat rasm qabul qilmaydi — matn bilan davom etamiz
+            logger.warning(
+                "Toifa rasmi yuborilmadi (category=%s) — matn qaytariladi",
+                category,
+            )
+    await target.answer(text, parse_mode="HTML", reply_markup=markup)
 
 
 @router.callback_query(
@@ -274,8 +309,7 @@ async def shop_category(
     if state is not None:
         await state.clear()
     await callback.answer()
-    text, markup = await _category_view(category)
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
+    await _send_category_view(callback.message, category)
     logger.info(
         "Toifa ko'rsatildi: user=%s category=%s",
         callback.from_user.id, category,

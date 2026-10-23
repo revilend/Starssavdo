@@ -71,6 +71,9 @@ class FakeMessage:
     async def answer(self, text: str, **kwargs):
         self.answers.append({"text": text, **kwargs})
 
+    async def answer_photo(self, photo: str, caption: str | None = None, **kwargs):
+        self.answers.append({"photo": photo, "caption": caption, **kwargs})
+
 
 class FakeCallback:
     def __init__(self, user, data: str, bot: FakeBot | None = None):
@@ -95,10 +98,12 @@ class FakePCQ:
 
 
 def make_product(pid=1, category="stars", title="100 Stars",
-                 description="Eng mashhur to'plam", price=100, active=True):
+                 description="Eng mashhur to'plam", price=100, active=True,
+                 image_file_id=None, payload=None):
     return SimpleNamespace(id=pid, category=category, title=title,
                            description=description, price_xtr=price,
-                           is_active=active)
+                           is_active=active, image_file_id=image_file_id,
+                           payload=payload)
 
 
 def make_order(oid=7, uid=555, pid=1, status="pending", method="xtr",
@@ -316,6 +321,18 @@ def test_shop_category():
            and "Eng mashhur to&#x27;plam" in a[0]["text"], a[0]["text"])
         cbs = kb_callbacks(a[0]["reply_markup"])
         ok("buy_prod tugmasi", "buy_prod_1" in cbs, str(cbs))
+
+        # rasmli mahsulot — foto sifatida (caption bilan) yuboriladi
+        prods[3] = make_product(3, "gift", "Rasmli gift", "Rasmli sovg'a", 50,
+                                image_file_id="AgACAgQxAAImgTest")
+        cb_img = FakeCallback(tg_user(555), "cat_gift")
+        await shop_mod.shop_category(cb_img)
+        a_img = cb_img.message.answers[-1]
+        ok("rasmli toifa foto sifatida yuboriladi",
+           a_img.get("photo") == "AgACAgQxAAImgTest"
+           and "Rasmli gift" in a_img.get("caption", ""), str(a_img))
+        ok("foto captionida ham tugmalar bor",
+           "buy_prod_3" in kb_callbacks(a_img["reply_markup"]))
 
         # bo'sh toifa
         cb2 = FakeCallback(tg_user(555), "cat_nft")

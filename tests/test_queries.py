@@ -336,6 +336,97 @@ async def main() -> None:
     except RepositoryError:
         ok("mavjud bo'lmagan foydalanuvchi -> xato", True)
 
+    print("== 11. ProductRepository: admin CRUD ==")
+    created = await ProductRepository.create_product(
+        "gift",
+        "  Yangi gift  ",
+        75,
+        description="  Tavsif  ",
+        payload={"gift_id": "123456"},
+        image_file_id="AgACAgQxAgADTestFileId",
+        sort_order=2,
+    )
+    ok("create: nom trim + narx",
+       created.title == "Yangi gift" and created.price_xtr == 75)
+    ok("create: gift payload", created.payload == {"gift_id": "123456"})
+    ok("create: faol holat", created.is_active is True)
+    ok("create: tavsif saqlandi", created.description == "Tavsif")
+    ok("create: rasm (image_file_id) saqlandi",
+       created.image_file_id == "AgACAgQxAgADTestFileId")
+
+    all_products = await ProductRepository.get_all_products()
+    ok("get_all_products: yangi mahsulot bor",
+       any(p.id == created.id for p in all_products))
+    ok("get_all_products: toifa bo'yicha tartib",
+       [p.category for p in all_products] == sorted(p.category for p in all_products))
+    try:
+        await ProductRepository.create_product("foo", "X", 10)
+        raise SystemExit("ValueError kutilgan")
+    except ValueError:
+        ok("create: noto'g'ri toifa -> ValueError", True)
+    try:
+        await ProductRepository.create_product("stars", "   ", 10)
+        raise SystemExit("ValueError kutilgan")
+    except ValueError:
+        ok("create: bo'sh nom -> ValueError", True)
+    try:
+        await ProductRepository.create_product("stars", "Nol", 0)
+        raise SystemExit("ValueError kutilgan")
+    except ValueError:
+        ok("create: narx 0 -> ValueError", True)
+
+    updated = await ProductRepository.update_product(
+        created.id, title="Premium gift", price_xtr=99, description=None
+    )
+    ok("update: nom/narx/tavsif",
+       updated.title == "Premium gift" and updated.price_xtr == 99
+       and updated.description is None)
+    ok("update: is_active",
+       (await ProductRepository.update_product(created.id, is_active=False)).is_active is False)
+    ok("update: rasm o'zgartirish",
+       (await ProductRepository.update_product(
+           created.id, image_file_id="NewFileId123"
+       )).image_file_id == "NewFileId123")
+    ok("update: rasmni o'chirish",
+       (await ProductRepository.update_product(
+           created.id, image_file_id=None
+       )).image_file_id is None)
+    try:
+        await ProductRepository.update_product(created.id, foo="x")
+        raise SystemExit("ValueError kutilgan")
+    except ValueError:
+        ok("update: noma'lum maydon -> ValueError", True)
+    try:
+        await ProductRepository.update_product(created.id, price_xtr=-5)
+        raise SystemExit("ValueError kutilgan")
+    except ValueError:
+        ok("update: manfiy narx -> ValueError", True)
+    try:
+        await ProductRepository.update_product(99999, title="yo'q")
+        raise SystemExit("RepositoryError kutilgan")
+    except RepositoryError:
+        ok("update: yo'q mahsulot -> RepositoryError", True)
+
+    ok("delete: buyurtmasiz -> hard delete",
+       await ProductRepository.delete_product(created.id) is True)
+    ok("delete: bazadan yo'qoldi",
+       await ProductRepository.get_product_by_id(created.id) is None)
+    try:
+        await ProductRepository.delete_product(created.id)
+        raise SystemExit("RepositoryError kutilgan")
+    except RepositoryError:
+        ok("delete: yo'q mahsulot -> RepositoryError", True)
+
+    ok("delete: buyurtmali -> soft delete",
+       await ProductRepository.delete_product(bal_id) is False)
+    soft = await ProductRepository.get_product_by_id(bal_id)
+    ok("soft delete: yozuv saqlanadi, nofaol",
+       soft is not None and soft.is_active is False)
+    rows = await q(
+        "SELECT count(*) FROM orders WHERE product_id=:pid", {"pid": bal_id}
+    )
+    ok("soft delete: buyurtma tarixi saqlanadi", rows[0][0] == 1)
+
     print(f"\nBARCHA TESTLAR O'TDI: {PASSED} ta tekshiruv")
 
 

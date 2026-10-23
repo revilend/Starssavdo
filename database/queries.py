@@ -968,6 +968,140 @@ class ProductRepository:
         async with get_session() as session:
             return await session.get(Product, product_id)
 
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_all_products(limit: int = 300) -> list[Product]:
+        """Admin panel uchun barcha mahsulotlar (toifa va tartib bo'yicha)."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Product)
+                .order_by(Product.category, Product.sort_order, Product.id)
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def create_product(
+        category: str,
+        title: str,
+        price_xtr: int,
+        description: str | None = None,
+        payload: dict[str, Any] | None = None,
+        image_file_id: str | None = None,
+        sort_order: int = 0,
+        is_active: bool = True,
+    ) -> Product:
+        """
+        Yangi mahsulot qo'shadi (admin panel).
+
+        Raises:
+            ValueError: toifa notanish, nom bo'sh yoki narx <= 0.
+        """
+        if category not in PRODUCT_CATEGORIES:
+            raise ValueError(f"Noto'g'ri kategoriya: {category!r}")
+        title = (title or "").strip()
+        if not title:
+            raise ValueError("Mahsulot nomi bo'sh bo'lishi mumkin emas")
+        if price_xtr <= 0:
+            raise ValueError("Narx 0 dan katta bo'lishi kerak")
+
+        async with get_session() as session:
+            product = Product(
+                category=category,
+                title=title,
+                description=(description or "").strip() or None,
+                price_xtr=price_xtr,
+                payload=payload,
+                image_file_id=(image_file_id or None),
+                sort_order=sort_order,
+                is_active=is_active,
+            )
+            session.add(product)
+            await session.flush()
+            logger.info(
+                "Mahsulot qo'shildi: id=%s category=%s title=%r price=%s img=%s",
+                product.id, category, title, price_xtr,
+                bool(image_file_id),
+            )
+            return product
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def update_product(product_id: int, **fields: Any) -> Product:
+        """
+        Mahsulot maydonlarini yangilaydi (`title`, `description`, `price_xtr`,
+        `payload`, `image_file_id`, `is_active`, `sort_order`, `category`).
+
+        Raises:
+            RepositoryError: mahsulot topilmadi.
+            ValueError: noto'g'ri qiymat (narx <= 0, bo'sh nom, ...).
+        """
+        allowed = {
+            "category", "title", "description", "price_xtr",
+            "payload", "image_file_id", "is_active", "sort_order",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"Noma'lum maydonlar: {', '.join(sorted(unknown))}")
+
+        if "category" in fields and fields["category"] not in PRODUCT_CATEGORIES:
+            raise ValueError(f"Noto'g'ri kategoriya: {fields['category']!r}")
+        if "title" in fields:
+            fields["title"] = (fields["title"] or "").strip()
+            if not fields["title"]:
+                raise ValueError("Mahsulot nomi bo'sh bo'lishi mumkin emas")
+        if "price_xtr" in fields and int(fields["price_xtr"]) <= 0:
+            raise ValueError("Narx 0 dan katta bo'lishi kerak")
+
+        async with get_session() as session:
+            product = await session.get(Product, product_id, with_for_update=True)
+            if product is None:
+                raise RepositoryError(f"Mahsulot {product_id} topilmadi")
+
+            for key, value in fields.items():
+                setattr(product, key, value)
+            await session.flush()
+            logger.info("Mahsulot yangilandi: id=%s fields=%s", product_id, list(fields))
+            return product
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def delete_product(product_id: int) -> bool:
+        """
+        Mahsulotni o'chiradi.
+
+        Agar mahsulot bo'yicha buyurtmalar mavjud bo'lsa (tarixni saqlash
+        uchun) o'chirish o'rniga `is_active=False` qilinadi va `False`
+        qaytariladi.
+
+        Returns: True — butunlay o'chirildi, False — nofaol qilindi.
+
+        Raises:
+            RepositoryError: mahsulot topilmadi.
+        """
+        async with get_session() as session:
+            product = await session.get(Product, product_id, with_for_update=True)
+            if product is None:
+                raise RepositoryError(f"Mahsulot {product_id} topilmadi")
+
+            orders_count = await session.scalar(
+                select(func.count(Order.id)).where(Order.product_id == product_id)
+            )
+            if orders_count:
+                product.is_active = False
+                await session.flush()
+                logger.info(
+                    "Mahsulot o'chirilmadi (buyurtmalar bor) — nofaol qilindi: %s",
+                    product_id,
+                )
+                return False
+
+            await session.delete(product)
+            await session.flush()
+            logger.info("Mahsulot o'chirildi: id=%s", product_id)
+            return True
+
 
 # =============================================================
 # 5. ORDER REPOSITORY

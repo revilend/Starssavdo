@@ -17,6 +17,9 @@ Guruhlar:
  - ManualBalanceStates     : foydalanuvchi balansini qo'lda o'zgartirish
      1. waiting_for_user_id  -> nixon foydalanuvchi IDsi
      2. waiting_for_amount   -> qo'shish/ayirish miqdori (+100 / -50)
+ - ProductStates           : mahsulot qo'shish / tahrirlash
+ - GiftStates              : '🎁 Giftlarni kiritish' (nom, narx, ta'rif, rasm, gift_id)
+ - PaymentCardStates       : to'lov kartasi rekvizitlari va tizim qiymatlari
 
 Ishlatish:
     from states.admin_states import AddChannelStates
@@ -60,6 +63,26 @@ class ButtonEditStates(StatesGroup):
 
     waiting_for_text = State()   # Yangi tugma nomi
     waiting_for_emoji = State()  # Premium emoji (custom_emoji entity) xabari
+
+
+class ProductStates(StatesGroup):
+    """Do'kon mahsulotlarini qo'shish / tahrirlash (admin panel)."""
+
+    waiting_for_title = State()        # Mahsulot nomi
+    waiting_for_description = State()  # Tavsif ("-" — o'tkazib yuborish)
+    waiting_for_price = State()        # Narx (XTR)
+    waiting_for_gift_id = State()      # Telegram gift_id (gift toifasi uchun)
+    waiting_for_edit_value = State()   # Tahrirlanayotgan maydonning yangi qiymati
+
+
+class GiftStates(StatesGroup):
+    """'🎁 Giftlarni kiritish' — alohida gift kiritish oqimi (admin)."""
+
+    waiting_for_title = State()        # 1. Gift nomi
+    waiting_for_price = State()        # 2. Narx (XTR)
+    waiting_for_description = State()  # 3. Ta'rif ("-" — o'tkazib yuborish)
+    waiting_for_image = State()        # 4. Rasm ("-" — o'tkazib yuborish)
+    waiting_for_gift_id = State()      # 5. Telegram gift_id ("-" — keyinroq)
 
 
 class PaymentCardStates(StatesGroup):

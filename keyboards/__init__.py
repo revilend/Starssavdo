@@ -15,8 +15,13 @@ Tez import:
 from keyboards.builders import (
     get_admin_channel_manage_kb,
     get_admin_main_kb,
+    get_admin_product_list_kb,
+    get_admin_products_kb,
     get_button_edit_kb,
     get_buttons_manage_kb,
+    get_product_category_kb,
+    get_product_delete_confirm_kb,
+    get_product_detail_kb,
     get_withdrawal_decision_kb,
 )
 from keyboards.inline import (
@@ -46,4 +51,9 @@ __all__ = [
     "get_withdrawal_decision_kb",
     "get_buttons_manage_kb",
     "get_button_edit_kb",
+    "get_admin_products_kb",
+    "get_product_category_kb",
+    "get_admin_product_list_kb",
+    "get_product_detail_kb",
+    "get_product_delete_confirm_kb",
 ]

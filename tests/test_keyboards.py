@@ -15,10 +15,15 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeybo
 from keyboards import (  # noqa: E402
     get_admin_channel_manage_kb,
     get_admin_main_kb,
+    get_admin_product_list_kb,
+    get_admin_products_kb,
     get_balance_kb,
     get_button_edit_kb,
     get_buttons_manage_kb,
     get_main_menu_kb,
+    get_product_category_kb,
+    get_product_delete_confirm_kb,
+    get_product_detail_kb,
     get_products_list_kb,
     get_referral_kb,
     get_shop_categories_kb,
@@ -150,15 +155,21 @@ def main() -> None:
     print("== builders: admin ==")
     kb = get_admin_main_kb()
     flat = [b for row in inline_rows(kb) for b in row]
-    ok("8 tugma (7 bo'lim + chiqish)", len(flat) == 8, str(len(flat)))
+    ok("11 tugma (10 bo'lim + chiqish)", len(flat) == 11, str(len(flat)))
     ok("callbacklar to'liq",
-       [b.callback_data for b in flat[:7]] == ["adm_stats", "adm_broadcast", "adm_channels",
+       [b.callback_data for b in flat[:10]] == ["adm_stats", "adm_broadcast", "adm_channels",
                                                "adm_ref_price", "adm_withdrawals", "adm_balance_edit",
+                                               "adm_gift_add", "adm_products", "adm_card",
                                                "adm_buttons"])
-    ok("yangi bo'lim: Tugnalar va Emojilar", flat[6].text == "🎛 Tugnalar va Emojilar")
-    ok("chiqish oxirida to'liq qator", flat[7].text == "❌ Chiqish"
-       and flat[7].callback_data == "adm_exit" and flat[7].style == "danger"
-       and len(inline_rows(kb)[4]) == 1)
+    ok("yangi bo'lim: Giftlarni kiritish", flat[6].text == "🎁 Giftlarni kiritish"
+       and flat[6].style == "success")
+    ok("yangi bo'lim: Mahsulotlarni boshqarish", flat[7].text == "🛍 Mahsulotlarni boshqarish")
+    ok("yangi bo'lim: Karta ma'lumotlari", flat[8].text == "💳 Karta ma'lumotlari"
+       and flat[8].style == "success")
+    ok("yangi bo'lim: Tugnalar va Emojilar", flat[9].text == "🎛 Tugnalar va Emojilar")
+    ok("chiqish oxirida to'liq qator", flat[10].text == "❌ Chiqish"
+       and flat[10].callback_data == "adm_exit" and flat[10].style == "danger"
+       and len(inline_rows(kb)[5]) == 1)
 
     class ACh:
         def __init__(self, i, title, active):
@@ -181,6 +192,68 @@ def main() -> None:
     ok("reject_payout_77", flat[1].text == "❌ Rad etish" and flat[1].callback_data == "reject_payout_77")
     ok("qaror ranglari: success/danger",
        flat[0].style == "success" and flat[1].style == "danger")
+
+    print("== builders: mahsulotlar (admin CRUD) ==")
+    kb = get_admin_products_kb({"stars": 3, "gift": 1})
+    r = inline_rows(kb)
+    flat = [b for row in r for b in row]
+    ok("umumiy ro'yxat + 4 toifa + qo'shish + orqaga", len(flat) == 7, str(len(flat)))
+    ok("barcha mahsulotlar tugmasi", flat[0].text == "📋 Barcha mahsulotlar (4)"
+       and flat[0].callback_data == "adm_plist_all", flat[0].text)
+    ok("toifa soni ko'rsatiladi", flat[1].text == "⭐️ Stars (3)"
+       and flat[4].text == "🎁 Mayda Giftlar (1)", flat[4].text)
+    ok("toifa callbacki", flat[1].callback_data == "adm_plist_stars"
+       and flat[3].callback_data == "adm_plist_nft")
+    ok("yangi mahsulot tugmasi", flat[5].callback_data == "adm_pnew"
+       and flat[5].style == "success")
+    ok("orqaga", flat[6].callback_data == "adm_back")
+    ok("sonlarsiz ham ishlaydi", "(0)" in get_admin_products_kb().inline_keyboard[0][0].text)
+
+    cat_kb = [b for row in inline_rows(get_product_category_kb()) for b in row]
+    ok("toifa tanlash: 4 + orqaga", len(cat_kb) == 5
+       and cat_kb[0].callback_data == "adm_padd_stars"
+       and cat_kb[3].callback_data == "adm_padd_gift"
+       and cat_kb[4].callback_data == "adm_products")
+
+    class APr:
+        def __init__(self, i, category, title, price, active=True):
+            self.id, self.category, self.title = i, category, title
+            self.price_xtr, self.is_active = price, active
+
+    product = APr(7, "gift", "Mayda gift", 50)
+    lst = [b for row in inline_rows(get_admin_product_list_kb([product, APr(8, "gift", "O'chiq", 10, False)], "gift")) for b in row]
+    ok("ro'yxat: holat + narx", lst[0].text == "✅ Mayda gift — 50⭐️"
+       and lst[1].text == "🚫 O'chiq — 10⭐️")
+    ok("ro'yxat callbacki", lst[0].callback_data == "adm_pdet_7")
+    ok("ro'yxat: qo'shish + orqaga", lst[2].callback_data == "adm_pnew"
+       and lst[3].callback_data == "adm_products")
+    all_lst = [b for row in inline_rows(
+        get_admin_product_list_kb([product], "all")) for b in row]
+    ok("umumiy ro'yxat: qo'shish tugmasi ham adm_pnew",
+       all_lst[1].callback_data == "adm_pnew")
+
+    detail = [b for row in inline_rows(get_product_detail_kb(product)) for b in row]
+    ok("karta: nom/narx/tavsif", [b.callback_data for b in detail[:3]] ==
+       ["adm_pedit_7_title", "adm_pedit_7_price", "adm_pedit_7_description"])
+    ok("kartada rasm tahrirlash", detail[3].callback_data == "adm_pedit_7_image")
+    ok("gift kartasida Gift ID", detail[4].callback_data == "adm_pedit_7_gift")
+    ok("karta: nofaol qilish + o'chirish", detail[5].callback_data == "adm_ptgl_7"
+       and detail[6].callback_data == "adm_pdel_7")
+    ok("karta: ro'yxatga qaytish", detail[7].callback_data == "adm_plist_gift")
+    stars_detail = [b for row in inline_rows(
+        get_product_detail_kb(APr(9, "stars", "100 Stars", 100))) for b in row]
+    ok("stars kartasida Gift ID yo'q",
+       all(b.callback_data != "adm_pedit_9_gift" for b in stars_detail))
+    ok("stars kartasida rasm bor",
+       stars_detail[3].callback_data == "adm_pedit_9_image")
+    inactive_detail = [b for row in inline_rows(
+        get_product_detail_kb(APr(10, "nft", "NFT", 900, False))) for b in row]
+    ok("nofaol kartada 'Faollashtirish'", inactive_detail[4].text == "✅ Faollashtirish"
+       and inactive_detail[4].style == "success")
+
+    confirm = [b for row in inline_rows(get_product_delete_confirm_kb(product)) for b in row]
+    ok("o'chirishni tasdiqlash", confirm[0].callback_data == "adm_pdelok_7"
+       and confirm[0].style == "danger" and confirm[1].callback_data == "adm_pdet_7")
 
     print("== builders: tugmalar va emojilar ==")
     kb = get_buttons_manage_kb([("menu_shop", "Do'kon"), ("menu_refer", "Taklif")])

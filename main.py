@@ -81,6 +81,7 @@ from handlers.admin.buttons import router as admin_buttons_router
 from handlers.admin.channels import router as admin_channels_router
 from handlers.admin.deposits import router as admin_deposits_router
 from handlers.admin.panel import router as admin_panel_router
+from handlers.admin.products import router as admin_products_router
 from handlers.admin.users_manage import router as admin_users_manage_router
 from handlers.admin.withdrawals import router as admin_withdrawals_router
 
@@ -165,6 +166,7 @@ def create_dispatcher() -> Dispatcher:
 
     # --- Routerlar: admin -> subscription -> start/referral -> shop/payout ---
     dp.include_router(admin_panel_router)
+    dp.include_router(admin_products_router)
     dp.include_router(admin_channels_router)
     dp.include_router(admin_broadcast_router)
     dp.include_router(admin_users_manage_router)

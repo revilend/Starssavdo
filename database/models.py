@@ -268,6 +268,10 @@ class Product(Base):
     payload: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True, comment="Mahsulot detali: {'stars': 100}, {'months': 1} ..."
     )
+    image_file_id: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="Mahsulot rasmi (Telegram file_id) — admin 'Giftlarni kiritish' da kiritadi",
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[dt.datetime] = mapped_column(

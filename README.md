@@ -13,7 +13,7 @@ aiogram 3.x boti. Render.com (Free Web Service) da **webhook** rejimida
 | `database/connection.py` | SQLAlchemy async engine + Supabase pool sozlamalari |
 | `database/models.py`, `database/queries.py` | Jadval modellari va repository qatlami |
 | `handlers/user/` | `/start`, obuna, do'kon, referal, yechib olish |
-| `handlers/admin/` | Admin panel: statistika, kanallar, rassilka, foydalanuvchilar, yechim |
+| `handlers/admin/` | Admin panel: statistika, kanallar, rassilka, mahsulotlar, foydalanuvchilar, yechim |
 | `middlewares/` | Throttling + majburiy obuna tekshiruvi |
 | `states/` | FSM holatlari |
 | `services/` | To'lov (XTR invoice), obuna, premium emoji, tugma reyestri, gift yetkazish |
@@ -207,8 +207,9 @@ taklif qilinadi:
 
 ## Karta orqali balans to'ldirish (UZCARD / HUMO) — 100% avtomatik
 
-1. Admin panel → **⭐️ Referal narxini sozlash** → **💳 To'lov kartasi**:
-   karta raqami (16–19 raqam) va egasi kiritiladi
+1. Admin panel → **💳 Karta ma'lumotlari** tugmasi (yoki eski yo'l:
+   **⭐️ Referal narxini sozlash** → **💳 To'lov kartasi**): karta raqami
+   (16–19 raqam) va egasi kiritiladi
    (`payment_card_number`, `payment_card_holder`). Shu menyuda
    **⭐️ 1 Stars narxi** (`star_price_uzs`, standart 250 so'm) va
    **📢 Xabarnoma guruhi ID** (`card_log_chat_id`) ham sozlanadi.
@@ -257,6 +258,59 @@ ma'lumotlarga tegmaydi. `products` jadvali bo'sh bo'lsa, `seed_default_products(
 har bir toifa (`stars`, `premium`, `nft`, `gift`) uchun boshlang'ich
 mahsulotlarni qo'shadi.
 
+## 🛍 Admin: mahsulotlarni boshqarish
+
+Admin panelda uchta tegishli tugma bor.
+
+### 🎁 Giftlarni kiritish (`adm_gift_add`)
+
+Yangi sovg'ani bosqichma-bosqich kiritish (FSM):
+
+1. **Nom** (1–64 belgi); 2. **Narx** (XTR, butun son);
+3. **Ta'rif** (`-` — o'tkazib yuborish); 4. **Rasm** — foto sifatida
+   (fayl `file_id` sifatida `products.image_file_id` ga saqlanadi,
+   `-` — o'tkazib yuborish); 5. **Telegram Gift ID** (`-` — keyinroq).
+
+Ma'lumot `products` jadvaliga `category='gift'` sifatida yoziladi va darhol
+**🎁 Mayda Giftlar** bo'limida sotila boshlanadi.
+
+### 🛍 Mahsulotlarni boshqarish (`adm_products`)
+
+* **📋 Barcha mahsulotlar** — bazadagi barcha sotiladigan narsalar
+  (stars, premium, nft, gift) bitta ro'yxatda; yuqorida esa toifalar
+  (soni bilan) ko'rsatiladi;
+* mahsulotni tanlab **nomini, tavsifini, narxini, rasmini** (yangi foto
+  yuborish yoki `-` bilan o'chirish) va **`gift_id`** ni tahrirlash;
+* **🚫 Nofaol qilish / ✅ Faollashtirish** — do'konda ko'rinishini boshqarish;
+* **🗑 O'chirish** — buyurtmasi yo'q mahsulot butunlay o'chiriladi, buyurtmasi
+  bor mahsulot tarixni saqlash uchun faqat nofaol qilinadi.
+
+Rasmli mahsulot do'konda **foto sifatida** (tavsifda nomi va narxi bilan)
+ko'rsatiladi.
+
+### 💳 Karta ma'lumotlari (`adm_card`)
+
+Karta raqami va egasini kiriting — foydalanuvchi **💳 Balans to'ldirish**
+ni bosganda aynan shu raqam ko'rsatiladi.
+
+Har qanday formani `/cancel` bilan bekor qilish mumkin. O'zgarishlar darhol
+do'konda ko'rinadi — botni qayta ishga tushirish shart emas.
+
+### SQL migratsiya (yangi ustunlar)
+
+Bot startupda `ensure_schema()` orqali quyidagi buyruqlarni **avtomatik**
+bajaradi (Supabase/Postgres'da xavfsiz, `IF NOT EXISTS` idempotent):
+
+```sql
+-- Mahsulot rasmi (admin 'Giftlarni kiritish' yoki kartadan kiritadi)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_file_id TEXT;
+```
+
+Kerak bo'lsa qo'lda ishga tushirishingiz mumkin (yana bir marta bajarish
+xavfsiz). Yangi jadval yaratilishi shart emas — giftlar `products` jadvalida
+saqlanadi; `payment_card_number` / `payment_card_holder` esa `settings`
+jadvalida kalit sifatida o'qiladi (yozish avtomatik, migratsiya kerak emas).
+
 ## Giftlarni avtomatik yuborish (`sendGift`)
 
 Mahsulot `payload` (JSON) maydonida rasmiy Telegram `gift_id` bo'lsa, to'lov
@@ -273,14 +327,9 @@ muvaffaqiyatli yakunlangach sovg'a avtomatik jo'natiladi:
 * `gift_id` yo'q bo'lsa yoki Telegram xato qaytarsa, buyurtma adminga
   yuboriladi (qo'lda yetkazish) va foydalanuvchi chekni oladi.
 
-`gift_id` larni `getAvailableGifts` orqali bilib olish mumkin; mahsulotga
-qiymatni SQL orqali yozing, masalan:
-
-```sql
-UPDATE products
-SET payload = '{"gift_id": "5170145012310081615"}'::json
-WHERE id = 1;
-```
+`gift_id` larni `getAvailableGifts` orqali bilib olish mumkin. Qiymatni
+admin panel orqali kiriting: **🛍 Mahsulotlar** → mahsulot kartasi →
+**🎁 Gift ID** (yoki yangi mahsulot qo'shishda 4-qadam). SQL shart emas.
 
 ## Supabase ulanishi
 

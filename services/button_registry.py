@@ -164,6 +164,15 @@ BUTTONS: dict[str, ButtonSpec] = {
     "adm_balance_edit": ButtonSpec(
         "adm_balance_edit", "👤 Balansni o'zgartirish", "admin", STYLE_PRIMARY
     ),
+    "adm_products": ButtonSpec(
+        "adm_products", "🛍 Mahsulotlarni boshqarish", "admin", STYLE_PRIMARY
+    ),
+    "adm_gift_add": ButtonSpec(
+        "adm_gift_add", "🎁 Giftlarni kiritish", "admin", STYLE_SUCCESS
+    ),
+    "adm_card": ButtonSpec(
+        "adm_card", "💳 Karta ma'lumotlari", "admin", STYLE_SUCCESS
+    ),
     "adm_buttons": ButtonSpec(
         "adm_buttons", "🎛 Tugnalar va Emojilar", "admin", STYLE_PRIMARY
     ),
