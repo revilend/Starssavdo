@@ -206,12 +206,43 @@ async def _begin_card_topup(target: Message, state: FSMContext) -> None:
         f"So'rov muddati: <b>{max(1, settings.DEPOSIT_TTL_SECONDS // 60)} daqiqa</b>\n\n"
         "Qancha Stars olmoqchisiz? Pastdagi tugmalardan tanlang yoki "
         "miqdorni butun son ko'rinishida yozing (masalan: <code>100</code>).\n\n"
-        f"Karta: <code>{_format_card_number(number)}</code>"
-        + (f"\nEgasi: <b>{html.escape(holder)}</b>" if holder else ""),
+        f"Karta: <code>{_format_card_number(number)}</code>\n"
+        f"Karta egasi: <b>Raximov D</b>",
         parse_mode="HTML",
         reply_markup=get_topup_presets_kb(),
     )
     logger.info("Karta topup boshlandi: user=%s", user_id)
+
+
+async def _begin_direct_card_topup(target: Message, state: FSMContext) -> None:
+    """💳 Balans to'ldirish tugmasi bosilganda to'g'ridan-to'g'ri karta yo'nalishiga o'tadi."""
+    number, holder = await _card_details()
+    if not number:
+        await state.clear()
+        await target.answer(NO_CARD_TEXT, parse_mode="HTML")
+        return
+
+    user_id = _user_id_of(target)
+    user = await UserRepository.get_user(user_id)
+    balance = user.stars_balance if user else 0
+    price = await SettingsRepository.get_star_price()
+
+    await state.set_state(TopupStates.waiting_for_amount)
+    await target.answer(
+        "💳 <b>Balans to'ldirish (Karta orqali)</b>\n\n"
+        f"Joriy balans: <b>{balance} ⭐️</b>\n"
+        f"1 ⭐️ narxi: <b>{format_som(price)} so'm</b>\n"
+        f"Minimal to'ldirish: <b>{MIN_TOPUP_STARS} ⭐️</b>\n"
+        f"So'rov muddati: <b>{max(1, settings.DEPOSIT_TTL_SECONDS // 60)} daqiqa</b>\n\n"
+        f"📇 Karta raqami: <code>{_format_card_number(number)}</code>\n"
+        f"👤 Karta egasi: <b>Raximov D</b>\n\n"
+        "Qancha Stars miqdorini to'ldirmoqchisiz?\n"
+        "Pastdagi tugmalardan tanlang yoki miqdorni yozing (masalan: <code>100</code>).\n\n"
+        "🧾 To'lovni amalga oshirib, chekni (skrinshot) yuborishingiz mumkin.",
+        parse_mode="HTML",
+        reply_markup=get_topup_presets_kb(),
+    )
+    logger.info("To'g'ridan-to'g'ri karta topup boshlandi: user=%s", user_id)
 
 
 # =============================================================
@@ -219,6 +250,7 @@ async def _begin_card_topup(target: Message, state: FSMContext) -> None:
 # =============================================================
 @router.message(StateFilter("*"), ButtonText("menu_topup"))
 @router.message(StateFilter("*"), F.text.contains("Balans to'ldirish"))
+@router.message(StateFilter("*"), lambda msg: msg.text and "to'ldirish" in msg.text.lower())
 async def topup_start_message(
     message: Message, state: FSMContext | None = None
 ) -> None:
@@ -226,7 +258,8 @@ async def topup_start_message(
     if state is None:
         return
     await state.clear()
-    await _begin_topup(message, state)
+    # To'g'ridan-to'g'ri karta orqali to'ldirishga yo'naltiramiz
+    await _begin_direct_card_topup(message, state)
 
 
 @router.callback_query(F.data == CB_TOPUP_START)

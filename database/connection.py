@@ -240,6 +240,9 @@ def _build_database_config(raw_url: str) -> tuple[str, dict[str, object]]:
     ssl_value = _resolve_ssl(parts.hostname, sslmode, ssl_flag)
     if ssl_value is not None:
         connect_args["ssl"] = ssl_value
+    # Kechikishsiz ulanish uchun timeoutlar
+    connect_args.setdefault("command_timeout", 30)
+    connect_args.setdefault("timeout", 10)
 
     # --- Supabase Connection Pooler (PgBouncer) ---
     try:
@@ -255,6 +258,9 @@ def _build_database_config(raw_url: str) -> tuple[str, dict[str, object]]:
         # yoki "... already exists" -> SQLAlchemyError.
         connect_args["statement_cache_size"] = 0
         connect_args["prepared_statement_cache_size"] = 0
+        # Minimal kechikish uchun timeout sozlamalari
+        connect_args.setdefault("command_timeout", 30)
+        connect_args.setdefault("timeout", 10)
 
     # --- Qayta yig'ilgan URL ---
     async_url = urlunsplit(

@@ -105,6 +105,7 @@ async def _main_menu_markup(user_id: int):
 # =============================================================
 @router.message(StateFilter("*"), ButtonText("menu_balance"))
 @router.message(StateFilter("*"), F.text.contains("Balansim"))
+@router.message(StateFilter("*"), lambda msg: msg.text and ("balansim" in msg.text.lower()))
 async def balance_menu(message: Message, state: FSMContext | None = None) -> None:
     """⭐️ Balansim — balans, jami to'plangan Stars va klaviatura."""
     if state is not None:
@@ -146,6 +147,7 @@ async def balance_menu(message: Message, state: FSMContext | None = None) -> Non
 # =============================================================
 @router.message(StateFilter("*"), ButtonText("menu_guide"))
 @router.message(StateFilter("*"), F.text.contains("Qo'llanma"))
+@router.message(StateFilter("*"), lambda msg: msg.text and ("qo'llanma" in msg.text.lower() or "qollanma" in msg.text.lower()))
 async def guide_menu(message: Message, state: FSMContext | None = None) -> None:
     """ℹ️ Qo'llanma — botdan foydalanish bo'yicha qisqa yo'riqnoma."""
     if state is not None:
