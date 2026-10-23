@@ -42,7 +42,7 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from sqlalchemy.exc import SQLAlchemyError
@@ -236,6 +236,15 @@ async def topup_start_callback(callback: CallbackQuery, state: FSMContext) -> No
     await callback.answer()
     await state.clear()
     await _begin_topup(callback.message, state)
+
+
+@router.message(StateFilter("*"), Command("topup"))
+async def cmd_topup(message: Message, state: FSMContext | None = None) -> None:
+    """`/topup` — 💳 Balans to'ldirish bo'limi bilan bir xil ishlaydi.
+
+    `services/commands.py` da `setMyCommands` bilan ro'yxatga olingan.
+    """
+    await topup_start_message(message, state)
 
 
 @router.callback_query(F.data == CB_TOPUP_CARD)

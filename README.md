@@ -16,9 +16,41 @@ aiogram 3.x boti. Render.com (Free Web Service) da **webhook** rejimida
 | `handlers/admin/` | Admin panel: statistika, kanallar, rassilka, mahsulotlar, foydalanuvchilar, yechim |
 | `middlewares/` | Throttling + majburiy obuna tekshiruvi |
 | `states/` | FSM holatlari |
-| `services/` | To'lov (XTR invoice), obuna, premium emoji, tugma reyestri, gift yetkazish |
+| `services/` | To'lov (XTR invoice), obuna, premium emoji, tugma reyestri, gift yetkazish, komandalar menyusi |
 | `render.yaml` | Render Blueprint (uvicorn start command, env o'zgaruvchilar) |
 | `database/schema.py` | Yetishmayotgan jadvallarni avtomatik yaratish (`create_all`) |
+
+## Komandalar menyusi (yozish satridagi Menyu tugmasi)
+
+Bot har bir ishga tushishda `services/commands.py` orqali quyidagilarni
+o'rnatadi (`lifespan`, webhook va polling rejimlarida bir xil):
+
+```python
+await bot.set_my_commands(BOT_COMMANDS)              # /start /menu /help ...
+await bot.set_chat_menu_button(menu_button=MenuButtonCommands(type="commands"))
+```
+
+Telegram `setMyCommands` ro'yxati faol ekan yozish satrida **Menyu**
+tugmasini (4 ta to'rtburchak) **avtomatik** chiqarib beradi; u bosilganda
+komandalar ro'yxati ochiladi:
+
+| Komanda | Nima qiladi |
+|---|---|
+| `/start` | Bosh menyu (obuna tekshiruvi bilan) |
+| `/menu` | Asosiy reply menyuni qayta ochadi |
+| `/help` | ℹ️ Qo'llanma |
+| `/shop` | 🛍 Do'kon |
+| `/balance` | ⭐️ Balansim |
+| `/topup` | 💳 Balans to'ldirish |
+
+Har bir komanda uchun `handlers/` da handler mavjud (`tests/test_commands.py`
+buni avtomatik tekshiradi). Komandalar o'rnatilsa ham startup **to'xtamaydi**
+— Telegram API xatosi faqat logga yoziladi.
+
+Asosiy pastki klaviatura esa `keyboards/reply.py` da `resize_keyboard=True`
+va **`is_persistent=True`** bilan quriladi: foydalanuvchi tugmalarni
+yashirib qo'yganda ham menyu istalgan payt Menyu tugmasi (yoki `/menu`)
+orqali qayta ochiladi.
 
 ## Ish rejimlari
 

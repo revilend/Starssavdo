@@ -38,7 +38,7 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 
@@ -215,6 +215,15 @@ async def shop_menu(message: Message, state: FSMContext | None = None) -> None:
         "Do'kon ochildi: user=%s",
         message.from_user.id if message.from_user else "?",
     )
+
+
+@router.message(StateFilter("*"), Command("shop"))
+async def cmd_shop(message: Message, state: FSMContext | None = None) -> None:
+    """`/shop` — 🛍 Do'kon bo'limi bilan bir xil ishlaydi.
+
+    `services/commands.py` da `setMyCommands` bilan ro'yxatga olingan.
+    """
+    await shop_menu(message, state)
 
 
 @router.message(StateFilter("*"), ButtonText("menu_gifts"))

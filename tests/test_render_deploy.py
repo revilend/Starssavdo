@@ -42,6 +42,7 @@ import pytest  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 import main as app_main  # noqa: E402
+from aiogram.methods import SetMyCommands  # noqa: E402
 from config.settings import Settings, settings  # noqa: E402
 from database.connection import _build_database_config  # noqa: E402
 
@@ -132,6 +133,8 @@ def _patch_runtime(
         "session_closed": 0,
         "close_connection": 0,
         "start_polling": [],
+        "set_my_commands": [],
+        "set_chat_menu_button": [],
     }
 
     async def fake_test_connection() -> bool:
@@ -164,6 +167,14 @@ def _patch_runtime(
     async def fake_noop(*args: Any, **kwargs: Any) -> None:
         return None
 
+    async def fake_set_my_commands(commands: Any = None, **kwargs: Any) -> bool:
+        calls["set_my_commands"].append({"commands": commands, **kwargs})
+        return True
+
+    async def fake_set_chat_menu_button(**kwargs: Any) -> bool:
+        calls["set_chat_menu_button"].append(kwargs)
+        return True
+
     monkeypatch.setattr(app_main, "test_connection", fake_test_connection)
     monkeypatch.setattr(app_main, "close_connection", fake_close_connection)
     monkeypatch.setattr(app_main, "ensure_schema", fake_noop)
@@ -171,6 +182,10 @@ def _patch_runtime(
     monkeypatch.setattr(app_main, "load_custom_emojis", fake_noop)
     monkeypatch.setattr(app_main.bot, "set_webhook", fake_set_webhook)
     monkeypatch.setattr(app_main.bot, "delete_webhook", fake_delete_webhook)
+    monkeypatch.setattr(app_main.bot, "set_my_commands", fake_set_my_commands)
+    monkeypatch.setattr(
+        app_main.bot, "set_chat_menu_button", fake_set_chat_menu_button
+    )
     monkeypatch.setattr(app_main.bot.session, "close", fake_session_close)
     monkeypatch.setattr(app_main.dp, "start_polling", fake_start_polling)
     return calls
@@ -333,6 +348,46 @@ def test_lifespan_polling_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     assert kwargs["close_bot_session"] is False
     # Polling rejimida ham resurslar yopiladi
     assert calls["close_connection"] == 1
+    assert calls["session_closed"] == 1
+
+
+def test_lifespan_installs_bot_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Startup'da komandalar (`setMyCommands`) va menyu tugmasi o'rnatiladi."""
+    monkeypatch.setattr(settings, "BOT_MODE", "webhook")
+    monkeypatch.setattr(settings, "WEBHOOK_URL", "https://nftyutbot.onrender.com")
+    calls = _patch_runtime(monkeypatch)
+
+    _run_lifespan()
+
+    assert len(calls["set_my_commands"]) == 1, "komandalar bir marta o'rnatiladi"
+    commands = calls["set_my_commands"][0]["commands"]
+    names = [command.command for command in commands]
+    assert "start" in names and "help" in names, names
+    assert len(names) == len(set(names)), f"takroriy komanda: {names}"
+
+    assert len(calls["set_chat_menu_button"]) == 1, "menyu tugmasi o'rnatiladi"
+    menu_button = calls["set_chat_menu_button"][0]["menu_button"]
+    assert menu_button.type == "commands"
+
+
+def test_lifespan_survives_command_setup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Komandalar o'rnatilsa ham startup to'xtamasin (Telegram API xatosi)."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    monkeypatch.setattr(settings, "BOT_MODE", "webhook")
+    monkeypatch.setattr(settings, "WEBHOOK_URL", "https://nftyutbot.onrender.com")
+    calls = _patch_runtime(monkeypatch)
+
+    async def broken_set_my_commands(*args: Any, **kwargs: Any) -> bool:
+        raise TelegramBadRequest(method=SetMyCommands(method="setMyCommands"),
+                                 message="Bad Request: test")
+
+    monkeypatch.setattr(app_main.bot, "set_my_commands", broken_set_my_commands)
+
+    _run_lifespan()  # xato startupni to'xtatmaydi
+    assert calls["delete_webhook"] == 1
     assert calls["session_closed"] == 1
 
 

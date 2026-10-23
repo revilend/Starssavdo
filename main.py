@@ -10,6 +10,10 @@ Arxitektura:
  - `lifespan` (startup/shutdown) boshqaradi:
      1) Supabase (PostgreSQL) ulanishini tekshiradi (`test_connection()`);
         muvaffaqiyatsiz bo'lsa ilova ishga tushmaydi (xato erta aniqlanadi).
+        Keyin sxema/seed, tugma override'lari, premium emoji va **bot
+        komandalari** o'rnatiladi (`services/commands.py`:
+        `setMyCommands` + `setChatMenuButton` — yozish satridagi menyu
+        tugmasi).
      2) Webhook rejimida: `set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
         drop_pending_updates=True, secret_token=WEBHOOK_SECRET,
         allowed_updates=...)`.
@@ -110,6 +114,7 @@ from database.connection import close_connection, test_connection
 from database.schema import ensure_schema
 from database.seed import seed_default_products
 from services.button_store import load_button_overrides
+from services.commands import setup_bot_commands
 from services.emoji_loader import load_custom_emojis
 
 logger = logging.getLogger(__name__)
@@ -353,6 +358,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # 1.3) Tugma override'lari (admin panel) va premium emoji ID'lari
         await load_button_overrides()
         await load_custom_emojis(bot)
+
+        # 1.4) Komandalar menyusi: setMyCommands + menyu tugmasi (4 to'rtburchak).
+        # Xato startupni buzmaydi — komandalar o'rnatilmasa ham bot ishlaydi.
+        await setup_bot_commands(bot)
 
         # 2) Tanlangan rejimni ishga tushirish
         if settings.BOT_MODE == "polling":

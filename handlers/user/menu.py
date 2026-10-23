@@ -22,7 +22,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -180,6 +180,41 @@ async def tx_history(callback: CallbackQuery, state: FSMContext | None = None) -
         lines.append(f"{label}: <b>{sign}{abs(tx.amount)} ⭐️</b>")
 
     await callback.message.answer("\n".join(lines), parse_mode="HTML")
+
+
+# =============================================================
+# 4. KOMANDALAR: /menu, /balance, /help
+# =============================================================
+# `services/commands.py` da `setMyCommands` bilan ro'yxatga olingan
+# buyruqlar — Telegram shu ro'yxat tufayli yozish satrida menyu
+# tugmasini (4 to'rtburchak) avtomatik chiqarib beradi.
+
+@router.message(StateFilter("*"), Command("menu"))
+async def cmd_menu(message: Message, state: FSMContext | None = None) -> None:
+    """`/menu` — asosiy menyuni qayta ochadi (klaviaturani qaytaradi)."""
+    if state is not None:
+        await state.clear()
+
+    is_admin = bool(
+        message.from_user and message.from_user.id in settings.ADMIN_IDS
+    )
+    await message.answer(
+        MAIN_MENU_TEXT,
+        parse_mode="HTML",
+        reply_markup=get_main_menu_kb(is_admin=is_admin),
+    )
+
+
+@router.message(StateFilter("*"), Command("balance"))
+async def cmd_balance(message: Message, state: FSMContext | None = None) -> None:
+    """`/balance` — ⭐️ Balansim bo'limi bilan bir xil ishlaydi."""
+    await balance_menu(message, state)
+
+
+@router.message(StateFilter("*"), Command("help"))
+async def cmd_help(message: Message, state: FSMContext | None = None) -> None:
+    """`/help` — ℹ️ Qo'llanma bo'limi bilan bir xil ishlaydi."""
+    await guide_menu(message, state)
 
 
 # =============================================================
