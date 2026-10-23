@@ -1,13 +1,14 @@
 """
 handlers/admin/users_manage.py
 ==============================
-Referal narxini sozlash va foydalanuvchi balansini qo'lda boshqarish.
+Tizim sozlamalari va foydalanuvchi balansini qo'lda boshqarish.
 
 Imkoniyatlar:
- - [ ⭐️ Referal narxini sozlash ] (`adm_ref_price`):
-     * Sub-menu: ⭐️ Referal narxi yoki 💸 Minimal yechib olish miqdori
-     * Ikkalasi ham bazadan (`settings` jadvali) o'qiladi va o'zgartiriladi;
-       `.env` qiymati faqat bazada kalit bo'lmasa fallback sifatida ishlatiladi.
+ - [ ⚙️ Tizim sozlamalari ] (`adm_ref_price`):
+     * Sub-menu: ⭐️ Referal narxi, 💸 Minimal yechib olish,
+       💳 To'lov kartasi, ⭐️ 1 Stars narxi va 📢 Xabarnoma guruhi ID
+     * Barcha qiymatlar bazadan (`settings` jadvali) o'qiladi va
+       o'zgartiriladi; `.env` qiymati faqat bazada kalit bo'lmasa fallback.
  - [ 👤 Balansni o'zgartirish ] (`adm_balance_edit`):
      1. Nixo'langan foydalanuvchi IDsi so'raladi (`waiting_for_user_id`)
      2. Miqdor so'raladi (`waiting_for_amount`):
@@ -258,7 +259,7 @@ async def users_manage_cancel(message: Message, state: FSMContext) -> None:
 # =============================================================
 @router.callback_query(F.data == CB_ADM_REF_PRICE)
 async def settings_menu(callback: CallbackQuery) -> None:
-    """[ ⭐️ Referal narxini sozlash ] — joriy qiymatlar bilan sub-menu."""
+    """[ ⚙️ Tizim sozlamalari ] — joriy qiymatlar bilan sub-menu."""
     text, kb = await _settings_menu_data()
     await callback.answer()
     await callback.message.answer(text, reply_markup=kb)

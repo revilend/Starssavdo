@@ -156,7 +156,7 @@ BUTTONS: dict[str, ButtonSpec] = {
         "adm_channels", "📢 Homiy kanallar", "admin", STYLE_PRIMARY
     ),
     "adm_ref_price": ButtonSpec(
-        "adm_ref_price", "⭐️ Referal narxini sozlash", "admin", STYLE_PRIMARY
+        "adm_ref_price", "⚙️ Tizim sozlamalari", "admin", STYLE_PRIMARY
     ),
     "adm_withdrawals": ButtonSpec(
         "adm_withdrawals", "💳 Yechib olish so'rovlari", "admin", STYLE_PRIMARY
