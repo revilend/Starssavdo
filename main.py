@@ -35,11 +35,14 @@ Arxitektura:
    (agar `WEBHOOK_SECRET` o'rnatilgan bo'lsa). Noto'g'ri token -> 403,
    buzilgan JSON -> 400, handlerdagi kutilmagan xato -> 500 (Telegram
    qayta yuboradi; buyurtma/referal operatsiyalari idempotent).
- - Routerlar tartibi: admin routers -> subscription -> start & referral
-   -> shop, payout, topup. Middlewarelar: Throttling -> Subscription.
- - Startup'da qo'shimcha: `ensure_schema()` (yetishmayotgan jadvallar),
-   `load_button_overrides()` (admin tugma sozlamalari) va
-   `load_custom_emojis(bot)` (Bot API 9.4 premium emoji ID'lari).
+ - Routerlar tartibi: admin routers -> subscription -> start, menu, shop,
+   referral (reply menyu handlerlari `StateFilter("*")` bilan) -> topup,
+   payout (FSM oqimlari) -> card_auto. Middlewarelar:
+   Throttling -> Subscription.
+ - Startup'da qo'shimcha: `ensure_schema()` (yetishmayotgan jadvallar va
+   ustunlar — masalan `users.total_earned_stars`), `seed_default_products()`
+   (bo'sh `products` uchun boshlang'ich katalog), `load_button_overrides()`
+   (admin tugma sozlamalari) va `load_custom_emojis(bot)` (premium emoji).
  - Bitta worker (uvicorn default) ishlatiladi: FSM `MemoryStorage` va
    ichki TTL keshlar jarayon ichida, shuning uchun `--workers > 1` tavsiya
    etilmaydi.
@@ -85,6 +88,7 @@ from handlers.admin.withdrawals import router as admin_withdrawals_router
 # 2. User routerlari (subscription -> start/referral -> shop/payout)
 # -------------------------------------------------------------
 from handlers.user.card_auto import router as card_auto_router
+from handlers.user.menu import router as menu_router
 from handlers.user.payout import router as payout_router
 from handlers.user.referral import router as referral_router
 from handlers.user.shop import router as shop_router
@@ -103,6 +107,7 @@ from middlewares.throttling import ThrottlingMiddleware
 # -------------------------------------------------------------
 from database.connection import close_connection, test_connection
 from database.schema import ensure_schema
+from database.seed import seed_default_products
 from services.button_store import load_button_overrides
 from services.emoji_loader import load_custom_emojis
 
@@ -169,12 +174,20 @@ def create_dispatcher() -> Dispatcher:
 
     dp.include_router(subscription_router)
 
+    # --- Asosiy reply menyu handlerlari ENG OLDIN ulanadi ---
+    # Har biri `StateFilter("*")` + `state.clear()` bilan ishlaydi, shuning
+    # uchun foydalanuvchi FSM oqimida qolib ketgan bo'lsa ham menyu
+    # tugmalari darhol javob beradi (state handler'lari ularni to'smaydi).
     dp.include_router(start_router)
+    dp.include_router(menu_router)
+    dp.include_router(shop_router)
     dp.include_router(referral_router)
 
-    dp.include_router(shop_router)
-    dp.include_router(payout_router)
+    # --- FSM oqimlari (to'ldirish / yechib olish) ---
+    # Invoys handlerlari payload prefiksi bo'yicha ajratiladi
+    # (`order:` / `topup:`), shuning uchun tartib muhim emas.
     dp.include_router(topup_router)
+    dp.include_router(payout_router)
     # Karta to'lovlari jurnali (faqat CARD_LOG_CHAT_ID chatida ishlaydi)
     dp.include_router(card_auto_router)
 
@@ -328,10 +341,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 "qiymatlarini tekshiring."
             )
 
-        # 1.1) Yetishmayotgan jadvallar (masalan, `deposits`) yaratiladi
+        # 1.1) Yetishmayotgan jadvallar va ustunlar yaratiladi
+        # (`deposits`, `transactions`, `users.total_earned_stars`, ...)
         await ensure_schema()
 
-        # 1.2) Tugma override'lari (admin panel) va premium emoji ID'lari
+        # 1.2) Do'kon bo'sh bo'lsa — boshlang'ich mahsulotlar (seed)
+        await seed_default_products()
+
+        # 1.3) Tugma override'lari (admin panel) va premium emoji ID'lari
         await load_button_overrides()
         await load_custom_emojis(bot)
 

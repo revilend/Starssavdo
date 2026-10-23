@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from services.button_registry import build_inline_button
@@ -42,6 +42,8 @@ CB_TOP_REFERRERS = "top_referrers"
 CB_WITHDRAW_START = "withdraw_start"
 CB_TOPUP_START = "topup_start"
 CB_TOPUP_CANCEL = "topup_cancel"
+CB_TOPUP_AUTO = "topup_auto"
+CB_TOPUP_CARD = "topup_card"
 CB_TX_HISTORY = "tx_history"
 
 # Xarid callback prefikslari
@@ -259,6 +261,36 @@ def get_topup_cancel_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(build_inline_button("close", callback_data=CB_TOPUP_CANCEL))
     builder.row(build_inline_button("menu_back", callback_data=CB_BACK_TO_MENU))
+    return builder.as_markup()
+
+
+# =============================================================
+# 6.1. TO'LOV USULINI TANLASH (avtomatik XTR yoki karta)
+# =============================================================
+def get_topup_methods_kb() -> InlineKeyboardMarkup:
+    """
+    Balans to'ldirish usulini tanlash:
+
+        [ ⚡️ Avtomatik to'lov (Telegram Stars) ]  (topup_auto, yashil)
+        [ 💳 Uzcard / Humo kartaga o'tkazish ]    (topup_card)
+        [ ❌ Yopish ]                             (topup_cancel)
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="⚡️ Avtomatik to'lov (Telegram Stars)",
+            callback_data=CB_TOPUP_AUTO,
+            style="success",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="💳 Uzcard / Humo kartaga o'tkazish",
+            callback_data=CB_TOPUP_CARD,
+            style="primary",
+        )
+    )
+    builder.row(build_inline_button("close", callback_data=CB_TOPUP_CANCEL))
     return builder.as_markup()
 
 

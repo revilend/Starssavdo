@@ -20,7 +20,8 @@ import logging
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from config.settings import settings
@@ -69,16 +70,25 @@ EXIT_TEXT = "👋 Admin paneldan chiqildi. Asosiy menyuga qaytdingiz."
 # =============================================================
 # 1. PANELNI OCHISH (reply tugma yoki /admin)
 # =============================================================
-@router.message(ButtonText("menu_admin"))
-async def admin_panel_open(message: Message) -> None:
+@router.message(StateFilter("*"), ButtonText("menu_admin"))
+@router.message(StateFilter("*"), F.text.contains("Admin Panel"))
+async def admin_panel_open(
+    message: Message, state: FSMContext | None = None
+) -> None:
     """Asosiy menyudan '⚙️ Admin Panel' bosilganda ochiladi."""
+    if state is not None:
+        await state.clear()
     await message.answer(PANEL_TEXT, reply_markup=get_admin_main_kb())
     logger.info("Admin panel ochildi: user=%s", message.from_user.id)
 
 
-@router.message(Command("admin"))
-async def admin_panel_command(message: Message) -> None:
+@router.message(StateFilter("*"), Command("admin"))
+async def admin_panel_command(
+    message: Message, state: FSMContext | None = None
+) -> None:
     """`/admin` buyrug'i orqali ochiladi."""
+    if state is not None:
+        await state.clear()
     await message.answer(PANEL_TEXT, reply_markup=get_admin_main_kb())
 
 

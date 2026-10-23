@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import html
 import logging
-from typing import Any
 
 from aiogram import Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from config.settings import settings
@@ -96,9 +96,17 @@ async def _register_referral(referrer_id: int, referred_id: int) -> None:
         )
 
 
-@router.message(Command("start"))
-async def cmd_start(message: Message, command: CommandObject) -> None:
+@router.message(StateFilter("*"), Command("start"))
+async def cmd_start(
+    message: Message,
+    command: CommandObject,
+    state: FSMContext | None = None,
+) -> None:
     """/start — yangi va mavjud foydalanuvchilar uchun kirish nuqtasi."""
+    # FSM oqimida qolib ketgan bo'lsa ham /start darhol ishlaydi.
+    if state is not None:
+        await state.clear()
+
     user = message.from_user
     if user is None:
         return

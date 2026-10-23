@@ -531,7 +531,16 @@ def test_topup_flow() -> None:
     no_card_msg = FakeMessage(user_id=user_id)
     no_card_state = FakeState()
     asyncio.run(topup.topup_start_message(no_card_msg, no_card_state))
-    ok("kartasiz ogohlantirish", no_card_msg.answers[0][0] == topup.NO_CARD_TEXT)
+    ok(
+        "kartasiz: avtomatik to'lov usuli taklif qilinadi",
+        "Avtomatik to'lov" in no_card_msg.answers[0][0]
+        and no_card_state.state is not None,
+    )
+
+    # Kartasiz karta usulini tanlash -> ogohlantirish (avtomatik to'lov ishlaydi)
+    card_cb = FakeCallback(user_id, "topup_card", FakeBot())
+    asyncio.run(topup.topup_card_callback(card_cb, no_card_state))
+    ok("kartasiz ogohlantirish", card_cb.message.answers[0][0] == topup.NO_CARD_TEXT)
 
 
 # =============================================================

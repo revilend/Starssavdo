@@ -380,6 +380,9 @@ class UserRepository:
                 )
 
             user.stars_balance = new_balance
+            if amount > 0:
+                # "Jami to'plangan" ko'rsatkichi ham yangilanadi (NULL bo'lsa 0).
+                user.total_earned_stars = (user.total_earned_stars or 0) + amount
             session.add(
                 TransactionRow(
                     user_id=user_id,
@@ -499,6 +502,29 @@ class UserRepository:
                 .order_by(User.user_id)
             )
             return [int(uid) for uid in result.scalars().all()]
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def get_recent_transactions(
+        user_id: int, limit: int = 10
+    ) -> list[TransactionRow]:
+        """
+        Foydalanuvchining oxirgi tranzaksiyalari (eng yangisi birinchi).
+
+        "📜 Tranzaksiyalar tarixi" tugmasi uchun ishlatiladi.
+        """
+        if limit <= 0:
+            return []
+        async with get_session() as session:
+            result = await session.execute(
+                select(TransactionRow)
+                .where(TransactionRow.user_id == user_id)
+                .order_by(
+                    TransactionRow.created_at.desc(), TransactionRow.id.desc()
+                )
+                .limit(limit)
+            )
+            return list(result.scalars().all())
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -1503,7 +1529,11 @@ class DepositRepository:
                     f"Foydalanuvchi {deposit.user_id} topilmadi (balans qo'shilmadi)"
                 )
 
-            user.stars_balance += deposit.amount
+            # NULL bo'lsa ham xatosiz: (x or 0) + amount
+            user.stars_balance = (user.stars_balance or 0) + deposit.amount
+            user.total_earned_stars = (
+                (user.total_earned_stars or 0) + deposit.amount
+            )
             session.add(
                 TransactionRow(
                     user_id=user.user_id,
@@ -1601,7 +1631,11 @@ class DepositRepository:
                     f"Foydalanuvchi {deposit.user_id} topilmadi (balans qo'shilmadi)"
                 )
 
-            user.stars_balance += deposit.amount
+            # NULL bo'lsa ham xatosiz: (x or 0) + amount
+            user.stars_balance = (user.stars_balance or 0) + deposit.amount
+            user.total_earned_stars = (
+                (user.total_earned_stars or 0) + deposit.amount
+            )
             session.add(
                 TransactionRow(
                     user_id=user.user_id,

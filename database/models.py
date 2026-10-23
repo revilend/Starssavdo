@@ -84,18 +84,28 @@ class User(Base):
         BIGINT,
         nullable=False,
         default=0,
+        server_default="0",
         comment="Joriy balans (Telegram Stars)",
+    )
+    total_earned_stars: Mapped[int] = mapped_column(
+        BIGINT,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Jami to'plangan Stars (to'ldirish + rewardlar)",
     )
     channels_verified: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
+        server_default="false",
         comment="Majburiy kanallarga a'zolik tasdiqlanganmi",
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,
+        server_default="true",
         comment="Rassilka uchun faol foydalanuvchi (ban bo'lsa False)",
     )
     created_at: Mapped[dt.datetime] = mapped_column(

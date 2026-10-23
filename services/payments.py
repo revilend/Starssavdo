@@ -46,6 +46,12 @@ STARS_INVOICE_START_PARAMETER: str = "stars-purchase"
 _PAYLOAD_PREFIX: str = "order"
 _PAYLOAD_PARTS: int = 3
 
+# Ochiq prefiks — handlerlar pre_checkout/successful_payment'ni ajratishi uchun.
+ORDER_PAYLOAD_PREFIX: str = _PAYLOAD_PREFIX
+
+# Balans to'ldirish invoysi: "topup:{deposit_id}:{user_id}"
+TOPUP_PAYLOAD_PREFIX: str = "topup"
+
 
 def build_order_payload(order_id: int, user_id: int) -> str:
     """
@@ -79,6 +85,34 @@ def parse_order_payload(payload: str) -> tuple[int, int] | None:
     if order_id <= 0 or user_id <= 0:
         return None
     return order_id, user_id
+
+
+def build_topup_payload(deposit_id: int, user_id: int) -> str:
+    """
+    Balans to'ldirish invoysi uchun payload.
+
+    Returns: "topup:{deposit_id}:{user_id}"
+    """
+    return f"{TOPUP_PAYLOAD_PREFIX}:{deposit_id}:{user_id}"
+
+
+def parse_topup_payload(payload: str) -> tuple[int, int] | None:
+    """
+    `build_topup_payload` qurgan payload'ni qayta o'qiydi.
+
+    Returns: (deposit_id, user_id) yoki None (noto'g'ri formatda).
+    """
+    parts = (payload or "").split(":")
+    if len(parts) != _PAYLOAD_PARTS or parts[0] != TOPUP_PAYLOAD_PREFIX:
+        return None
+    try:
+        deposit_id = int(parts[1])
+        user_id = int(parts[2])
+    except ValueError:
+        return None
+    if deposit_id <= 0 or user_id <= 0:
+        return None
+    return deposit_id, user_id
 
 
 async def send_stars_invoice(

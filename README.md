@@ -193,13 +193,25 @@ yoki `custom_emoji_id` raqamini kiritish;
 O'zgarishlar `settings` jadvalida `btn:<key>:text` / `btn:<key>:icon`
 sifatida saqlanadi va darhol barcha klaviaturalarga qo'llanadi.
 
+## Balans to'ldirish — 2 usul
+
+Foydalanuvchi **💳 Balans to'ldirish** tugmasini bosganda ikkita usul
+taklif qilinadi:
+
+* **⚡️ Avtomatik to'lov (Telegram Stars / XTR)** — foydalanuvchi Stars
+  miqdorini kiritadi, bot `send_invoice(currency="XTR")` yuboradi.
+  `successful_payment` kelganda balans **admin aralashuvisiz darhol**
+  qo'shiladi (`deposits` yozuvi + `transactions` audit), takroriy to'lov
+  ikki marta hisoblanmaydi.
+* **💳 Uzcard / Humo kartaga o'tkazish** — unikal summa + chek (quyida).
+
 ## Karta orqali balans to'ldirish (UZCARD / HUMO) — 100% avtomatik
 
 1. Admin panel → **⭐️ Referal narxini sozlash** → **💳 To'lov kartasi**:
    karta raqami (16–19 raqam) va egasi kiritiladi
    (`payment_card_number`, `payment_card_holder`).
-2. Foydalanuvchi **💳 Balans to'ldirish** → Stars miqdorini kiritadi
-   (min 10 ⭐️). Bot summani hisoblaydi:
+2. **💳 Balans to'ldirish** → **💳 Uzcard / Humo kartaga o'tkazish** →
+   Stars miqdori kiritiladi (min 10 ⭐️). Bot summani hisoblaydi:
    `stars × SOM_PER_STAR + 1..99 so'm unikal kod` (masalan 100 ⭐️ va
    `SOM_PER_STAR=250` → **25 037 so'm**). Unikal kod takrorlanmaydi.
 3. Foydalanuvchi aynan shu summani kartaga o'tkazadi. `@CardXabarBot` /
@@ -223,9 +235,12 @@ chati ID; `0` — avtomatik tasdiqlash o'chirilgan).
 > xabarini botga qo'lda forward qiling. Bu holatda ham chek + admin yo'li
 > ishlaydi.
 
-`deposits` jadvali va yangi ustunlar (`pay_amount`, `payment_comment`)
+`deposits`, `transactions`, `users` jadvallari va yetishmayotgan barcha
+ustunlar (`pay_amount`, `payment_comment`, `users.total_earned_stars`, ...)
 startupda `ensure_schema()` orqali avtomatik yaratiladi/qo'shiladi — mavjud
-ma'lumotlarga tegmaydi.
+ma'lumotlarga tegmaydi. `products` jadvali bo'sh bo'lsa, `seed_default_products()`
+har bir toifa (`stars`, `premium`, `nft`, `gift`) uchun boshlang'ich
+mahsulotlarni qo'shadi.
 
 ## Giftlarni avtomatik yuborish (`sendGift`)
 

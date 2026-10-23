@@ -35,6 +35,8 @@ from database.queries import (
     DepositStateError,
     RepositoryError,
 )
+from database.schema import ensure_schema
+
 logger = logging.getLogger(__name__)
 
 router = Router(name="admin_deposits")
@@ -82,6 +84,26 @@ def _parse_deposit_id(data: str | None) -> int | None:
     return int(raw) if raw.isdigit() else None
 
 
+async def _with_schema_retry(operation, *, label: str):
+    """
+    DB amalini bajaradi; `SQLAlchemyError` bo'lsa sxemani qayta tekshirib,
+    bir marta qayta urinadi.
+
+    Bu eski Supabase bazasida yetishmayotgan ustun/jadvalar sabab bo'lgan
+    "Bazada xatolik yuz berdi" xatosini deploy paytida o'z-o'zidan tuzatadi.
+    """
+    try:
+        return await operation()
+    except SQLAlchemyError:
+        logger.exception("%s: DB xatoligi — sxema qayta tekshiriladi", label)
+        try:
+            await ensure_schema()
+        except Exception:  # noqa: BLE001 — asl xato muhimroq
+            logger.exception("%s: sxemani yangilab bo'lmadi", label)
+            raise
+        return await operation()
+
+
 async def _notify_user(bot, user_id: int, text: str) -> None:
     """Foydalanuvchiga xabar yuboradi (bloklagan bo'lsa — log)."""
     try:
@@ -117,8 +139,9 @@ async def deposit_approve(callback: CallbackQuery) -> None:
 
     admin_id = callback.from_user.id
     try:
-        deposit, new_balance = await DepositRepository.confirm_deposit(
-            deposit_id, admin_id
+        deposit, new_balance = await _with_schema_retry(
+            lambda: DepositRepository.confirm_deposit(deposit_id, admin_id),
+            label=f"deposit_approve#{deposit_id}",
         )
     except DepositStateError:
         await callback.answer(
@@ -172,8 +195,11 @@ async def deposit_reject(callback: CallbackQuery) -> None:
 
     admin_id = callback.from_user.id
     try:
-        deposit = await DepositRepository.reject_deposit(
-            deposit_id, admin_id, DEFAULT_REJECT_REASON
+        deposit = await _with_schema_retry(
+            lambda: DepositRepository.reject_deposit(
+                deposit_id, admin_id, DEFAULT_REJECT_REASON
+            ),
+            label=f"deposit_reject#{deposit_id}",
         )
     except DepositStateError:
         await callback.answer(

@@ -34,7 +34,9 @@ import logging
 from typing import Any
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 
 from config.settings import settings
@@ -51,6 +53,7 @@ from database.queries import (
 from keyboards.inline import (
     CB_PAY_BALANCE_PREFIX,
     CB_PAY_XTR_PREFIX,
+    CB_SHOP_CATEGORIES,
     CATEGORY_EMOJI,
     get_payment_methods_kb,
     get_products_list_kb,
@@ -59,6 +62,7 @@ from keyboards.inline import (
 from services.button_registry import ButtonText
 from services.gift_delivery import deliver_gift
 from services.payments import (
+    ORDER_PAYLOAD_PREFIX,
     build_order_payload,
     parse_order_payload,
     send_stars_invoice,
@@ -183,23 +187,35 @@ async def _notify_admins(
 # =============================================================
 # 1. DO'KON KIRISHI
 # =============================================================
-@router.message(ButtonText("menu_shop"))
-async def shop_menu(message: Message) -> None:
-    """🛍 Do'kon — kirish sahifasi va toifalar menyusi."""
+@router.message(StateFilter("*"), ButtonText("menu_shop"))
+@router.message(StateFilter("*"), F.text.contains("Do'kon"))
+async def shop_menu(message: Message, state: FSMContext | None = None) -> None:
+    """🛍 Do'kon — kirish sahifasi va toifalar menyusi (istalgan holatda)."""
+    if state is not None:
+        await state.clear()
     await message.answer(
         SHOP_WELCOME_TEXT,
         parse_mode="HTML",
         reply_markup=get_shop_categories_kb(),
     )
-    logger.info("Do'kon ochildi: user=%s", message.from_user.id)
+    logger.info(
+        "Do'kon ochildi: user=%s",
+        message.from_user.id if message.from_user else "?",
+    )
 
 
-@router.message(ButtonText("menu_gifts"))
-async def gifts_menu(message: Message) -> None:
+@router.message(StateFilter("*"), ButtonText("menu_gifts"))
+@router.message(StateFilter("*"), F.text.contains("Mayda Giftlar"))
+async def gifts_menu(message: Message, state: FSMContext | None = None) -> None:
     """🎁 Mayda Giftlar — to'g'ridan-to'g'ri gift toifasini ko'rsatadi."""
+    if state is not None:
+        await state.clear()
     text, markup = await _category_view("gift")
     await message.answer(text, parse_mode="HTML", reply_markup=markup)
-    logger.info("Giftlar bo'limi ochildi: user=%s", message.from_user.id)
+    logger.info(
+        "Giftlar bo'limi ochildi: user=%s",
+        message.from_user.id if message.from_user else "?",
+    )
 
 
 # =============================================================
@@ -233,14 +249,20 @@ async def _category_view(category: str) -> tuple[str, Any]:
     return text, get_products_list_kb(products, category)
 
 
-@router.callback_query(F.data.startswith("cat_"))
-async def shop_category(callback: CallbackQuery) -> None:
+@router.callback_query(
+    StateFilter("*"), F.data.startswith("cat_")
+)
+async def shop_category(
+    callback: CallbackQuery, state: FSMContext | None = None
+) -> None:
     """Tanlangan toifadagi faol mahsulotlar (nom, narx, tavsif)."""
     category = (callback.data or "")[len("cat_"):].strip()
     if category not in PRODUCT_CATEGORIES:
         await callback.answer(ALERT_CATEGORY_NOT_FOUND, show_alert=True)
         return
 
+    if state is not None:
+        await state.clear()
     await callback.answer()
     text, markup = await _category_view(category)
     await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
@@ -248,6 +270,33 @@ async def shop_category(callback: CallbackQuery) -> None:
         "Toifa ko'rsatildi: user=%s category=%s",
         callback.from_user.id, category,
     )
+
+
+# =============================================================
+# 2.1. "◀️ ORQAGA" — TOIFALAR MENYUSIGA QAYTISH
+# =============================================================
+@router.callback_query(StateFilter("*"), F.data == CB_SHOP_CATEGORIES)
+async def shop_categories_callback(
+    callback: CallbackQuery, state: FSMContext | None = None
+) -> None:
+    """`shop_categories` — mahsulotlar ro'yxatidan toifalarga qaytaradi."""
+    if state is not None:
+        await state.clear()
+    await callback.answer()
+
+    try:
+        await callback.message.edit_text(
+            SHOP_WELCOME_TEXT,
+            parse_mode="HTML",
+            reply_markup=get_shop_categories_kb(),
+        )
+    except (TelegramBadRequest, AttributeError):
+        # Xabar tahrirlanmaydi (rasm/eski xabar) — yangi xabar yuboramiz
+        await callback.message.answer(
+            SHOP_WELCOME_TEXT,
+            parse_mode="HTML",
+            reply_markup=get_shop_categories_kb(),
+        )
 
 
 # =============================================================
@@ -343,7 +392,9 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
     )
 
 
-@router.pre_checkout_query()
+@router.pre_checkout_query(
+    F.invoice_payload.startswith(f"{ORDER_PAYLOAD_PREFIX}:")
+)
 async def on_pre_checkout(query: PreCheckoutQuery) -> None:
     """
     To'lov tasdiqlash so'rovi — 10 soniya ichida javob BERILISHI SHART.
@@ -385,7 +436,9 @@ async def on_pre_checkout(query: PreCheckoutQuery) -> None:
                 query.from_user.id, order_id)
 
 
-@router.message(F.successful_payment)
+@router.message(
+    F.successful_payment.invoice_payload.startswith(f"{ORDER_PAYLOAD_PREFIX}:")
+)
 async def on_successful_payment(message: Message) -> None:
     """
     Stars orqali to'lov muvaffaqiyatli yakunlangach:

@@ -20,6 +20,8 @@ from typing import Any
 
 from cachetools import TTLCache
 from aiogram import F, Router
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
 from config.settings import settings
@@ -77,10 +79,18 @@ async def _get_bot_username(bot: Any) -> str:
     return me.username
 
 
-@router.message(ButtonText("menu_refer"))
-async def referral_menu(message: Message) -> None:
-    """Referal bo'limi postini yuboradi."""
+@router.message(StateFilter("*"), ButtonText("menu_refer"))
+@router.message(StateFilter("*"), F.text.contains("taklif qilish"))
+async def referral_menu(
+    message: Message, state: FSMContext | None = None
+) -> None:
+    """Referal bo'limi postini yuboradi (istalgan FSM holatida)."""
+    if state is not None:
+        await state.clear()
+
     user = message.from_user
+    if user is None:
+        return
     user_id = user.id
 
     # Joriy referal narxi (bazadan; fallback .env)
@@ -115,8 +125,10 @@ async def referral_menu(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data == CB_TOP_REFERRERS)
-async def top_referrers(callback: CallbackQuery) -> None:
+@router.callback_query(StateFilter("*"), F.data == CB_TOP_REFERRERS)
+async def top_referrers(
+    callback: CallbackQuery, state: FSMContext | None = None
+) -> None:
     """🏆 Top 10 taklif qiluvchilar ro'yxatini ko'rsatadi."""
     top = await ReferralRepository.get_top_referrers(limit=10)
 

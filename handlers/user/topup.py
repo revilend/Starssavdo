@@ -1,29 +1,33 @@
 """
 handlers/user/topup.py
 ======================
-Karta (UZCARD / HUMO) orqali balans to'ldirish oqimi.
+Balans to'ldirish — 2 usul bilan.
 
 Oqim:
  1. "💳 Balans to'ldirish" (reply tugma) yoki `topup_start` callback:
-      - admin kiritgan karta rekvizitlari tekshiriladi
-        (`payment_card_number`, `payment_card_holder`);
-      - foydalanuvchidan Stars miqdori so'raladi
-        (`TopupStates.waiting_for_amount`).
- 2. Miqdor tekshiriladi (10..1 000 000) va `stars * SOM_PER_STAR + 1..99`
-    unikal summa bilan `pending` so'rov yaratiladi; karta raqami va aynan
-    to'lanadigan summa ko'rsatiladi (`TopupStates.waiting_for_receipt`).
- 3. To'lov jurnali (`CARD_LOG_CHAT_ID`) orqali summa aniqlansa — balans
-    **avtomatik** qo'shiladi (`handlers/user/card_auto.py`).
- 4. Chek (skrinshot) yuborilsa — u mavjud so'rovga biriktiriladi va
-    **barcha adminlarga** rasm + [✅ Tasdiqlash] / [❌ Rad etish] tugmalari
-    bilan yuboriladi (zaxira yo'l).
- 5. Admin tasdiqlasa — balans atomik qo'shiladi
-    (`handlers/admin/deposits.py`).
+      usullar menyusi (`TopupStates.waiting_for_method`):
+        a) ⚡️ **Avtomatik to'lov** — Telegram Stars (XTR) invoysi;
+        b) 💳 **Uzcard / Humo kartaga o'tkazish** — unikal summa + chek.
+ 2. ⚡️ Avtomatik to'lov (`topup_auto`):
+      foydalanuvchi Stars miqdorini kiritadi -> `pending` deposit yaratiladi
+      -> `bot.send_invoice(currency="XTR")` yuboriladi.
+      `successful_payment` kelganda balans **admin aralashuvisiz** qo'shiladi
+      (`DepositRepository.confirm_deposit`, idempotent).
+ 3. 💳 Karta (`topup_card`): miqdor so'raladi (10..1 000 000), so'ng
+    `stars * SOM_PER_STAR + 1..99` unikal summa va karta raqami ko'rsatiladi
+    (`TopupStates.waiting_for_receipt`).
+      - `CARD_LOG_CHAT_ID` jurnaliga aynan shu summa tushsa — balans
+        avtomatik qo'shiladi (`handlers/user/card_auto.py`);
+      - foydalanuvchi chek (skrinshot) yuborsa — u mavjud so'rovga
+        biriktiriladi va barcha adminlarga [✅ Tasdiqlash] / [❌ Rad etish]
+        tugmalari bilan yuboriladi (zaxira yo'l).
 
 Xavfsizlik:
- - Balans faqat admin tasdig'idan keyin, atomik (`FOR UPDATE`) qo'shiladi.
- - Har bir so'rov bazada saqlanadi — ikki marta tasdiqlab bo'lmaydi.
- - Chek `file_id` sifatida saqlanadi (keyin tekshirish uchun).
+ - Balans faqat to'lov tasdiqlangach, atomik (`FOR UPDATE`) qo'shiladi.
+ - Har bir so'rov bazada saqlanadi — ikki marta hisoblanmaydi
+   (`DepositStateError`).
+ - Invoys payload'i `topup:{deposit_id}:{user_id}` — pre_checkout'da
+   egasi va so'rov holati tekshiriladi.
 """
 
 from __future__ import annotations
@@ -34,28 +38,42 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
+from sqlalchemy.exc import SQLAlchemyError
 
 from config.settings import settings
 from database.queries import (
+    AUTO_DEPOSIT_ADMIN_ID,
     DEPOSIT_APPROVED,
+    DEPOSIT_PENDING,
     DEPOSIT_REJECTED,
     SETTING_CARD_HOLDER,
     SETTING_CARD_NUMBER,
     DepositRepository,
+    DepositStateError,
     RepositoryError,
     SettingsRepository,
     UserRepository,
 )
 from keyboards.inline import (
+    CB_TOPUP_AUTO,
     CB_TOPUP_CANCEL,
+    CB_TOPUP_CARD,
     CB_TOPUP_START,
     get_deposit_decision_kb,
     get_topup_cancel_kb,
+    get_topup_methods_kb,
 )
 from services.button_registry import ButtonText
 from services.card_payment import format_som
+from services.payments import (
+    TOPUP_PAYLOAD_PREFIX,
+    build_topup_payload,
+    parse_topup_payload,
+    send_stars_invoice,
+)
 from states.topup_states import TopupStates
 
 logger = logging.getLogger(__name__)
@@ -66,11 +84,55 @@ router = Router(name="user_topup")
 MIN_TOPUP_STARS = 10
 MAX_TOPUP_STARS = 1_000_000
 
+# Usullar menyusi matni
+METHODS_TEXT = (
+    "💳 <b>Balans to'ldirish</b>\n\n"
+    "Joriy balans: <b>{balance} ⭐️</b>\n\n"
+    "To'lov usulini tanlang 👇\n\n"
+    "⚡️ <b>Avtomatik to'lov</b> — Telegram Stars bilan to'lang, balans "
+    "darhol qo'shiladi (admin kutilmaydi).\n"
+    "💳 <b>Karta</b> — Uzcard / Humo kartaga o'tkazma qiling."
+)
+
 # Standart ogohlantirishlar
 NO_CARD_TEXT = (
     "⚠️ <b>Karta rekvizitlari hali kiritilmagan.</b>\n\n"
     "Hozircha balansni karta orqali to'ldirib bo'lmaydi. "
-    "Administrator bilan bog'laning."
+    "Administrator bilan bog'laning yoki ⚡️ avtomatik to'lovdan foydalaning."
+)
+
+AUTO_AMOUNT_TEXT = (
+    "⚡️ <b>Avtomatik to'lov (Telegram Stars)</b>\n\n"
+    "Balansingizga qo'shmoqchi bo'lgan Stars miqdorini kiriting "
+    "(masalan: <code>100</code>).\n\n"
+    f"Minimal: <b>{MIN_TOPUP_STARS} ⭐️</b>\n"
+    f"Maksimal: <b>{MAX_TOPUP_STARS} ⭐️</b>\n\n"
+    "To'lov Telegram Stars balansingizdan yechiladi va bot balansingizga "
+    "darhol qo'shiladi."
+)
+
+AUTO_INVOICE_SENT_TEXT = (
+    "⚡️ <b>To'lov oynasi yuborildi!</b>\n\n"
+    "├ Miqdor: <b>{amount} ⭐️</b>\n"
+    "├ So'rov: <code>#{deposit_id}</code>\n"
+    "└ Holat: 🕓 <i>to'lov kutilmoqda</i>\n\n"
+    "To'lovni yakunlasangiz, balans <b>avtomatik</b> qo'shiladi."
+)
+
+AUTO_SUCCESS_TEXT = (
+    "✅ <b>To'lov qabul qilindi — balans to'ldirildi!</b>\n\n"
+    "├ Miqdor: <b>+{amount} ⭐️</b>\n"
+    "├ Yangi balans: <b>{balance} ⭐️</b>\n"
+    "└ So'rov: <code>#{deposit_id}</code>\n\n"
+    "Xarid qilishingiz mumkin! 🛍"
+)
+
+ADMIN_AUTO_TOPUP_TEXT = (
+    "⚡️ <b>AVTOMATIK STARS TO'LOVI</b>\n\n"
+    "├ Foydalanuvchi: <code>{user_id}</code>\n"
+    "├ Miqdor: <b>+{amount} ⭐️</b>\n"
+    "└ So'rov: <code>#{deposit_id}</code>\n\n"
+    "Balans admin aralashuvisiz qo'shildi."
 )
 
 
@@ -88,14 +150,43 @@ async def _card_details() -> tuple[str, str]:
     return str(number or "").strip(), str(holder or "").strip()
 
 
+def _user_id_of(target: Message) -> int:
+    """Message'dan foydalanuvchi ID'sini oladi."""
+    return target.from_user.id if target.from_user else target.chat.id
+
+
+# =============================================================
+# 1. USULLAR MENYUSI
+# =============================================================
 async def _begin_topup(target: Message, state: FSMContext) -> None:
-    """To'ldirish oqimini boshlaydi (miqdor so'raydi)."""
+    """To'ldirish usullarini taklif qiladi (avtomatik yoki karta)."""
+    user_id = _user_id_of(target)
+    user = await UserRepository.get_user(user_id)
+    balance = user.stars_balance if user else 0
+    number, _holder = await _card_details()
+
+    text = METHODS_TEXT.format(balance=balance)
+    if number:
+        text += f"\n\n💳 Karta: <code>{_format_card_number(number)}</code>"
+
+    await state.set_state(TopupStates.waiting_for_method)
+    await target.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_topup_methods_kb(),
+    )
+    logger.info("Topup usullari ko'rsatildi: user=%s", user_id)
+
+
+async def _begin_card_topup(target: Message, state: FSMContext) -> None:
+    """Karta orqali to'ldirish: miqdor so'raydi."""
     number, holder = await _card_details()
     if not number:
-        await target.answer(NO_CARD_TEXT)
+        await state.clear()
+        await target.answer(NO_CARD_TEXT, parse_mode="HTML")
         return
 
-    user_id = target.from_user.id if target.from_user else target.chat.id
+    user_id = _user_id_of(target)
     user = await UserRepository.get_user(user_id)
     balance = user.stars_balance if user else 0
 
@@ -111,25 +202,52 @@ async def _begin_topup(target: Message, state: FSMContext) -> None:
         parse_mode="HTML",
         reply_markup=get_topup_cancel_kb(),
     )
-    logger.info("Topup boshlandi: user=%s", user_id)
+    logger.info("Karta topup boshlandi: user=%s", user_id)
 
 
 # =============================================================
-# 1. BOSHLASH (reply tugma yoki inline callback)
+# 2. REPLY TUGMA VA CALLBACK — BOSHLASH
 # =============================================================
-@router.message(ButtonText("menu_topup"))
-async def topup_start_message(message: Message, state: FSMContext) -> None:
+@router.message(StateFilter("*"), ButtonText("menu_topup"))
+@router.message(StateFilter("*"), F.text.contains("Balans to'ldirish"))
+async def topup_start_message(
+    message: Message, state: FSMContext | None = None
+) -> None:
+    """💳 Balans to'ldirish — FSM holatidan qat'i nazar darhol ishlaydi."""
+    if state is None:
+        return
+    await state.clear()
     await _begin_topup(message, state)
 
 
 @router.callback_query(F.data == CB_TOPUP_START)
 async def topup_start_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.clear()
     await _begin_topup(callback.message, state)
 
 
+@router.callback_query(F.data == CB_TOPUP_CARD)
+async def topup_card_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """💳 Uzcard / Humo kartaga o'tkazish usuli."""
+    await callback.answer()
+    await _begin_card_topup(callback.message, state)
+
+
+@router.callback_query(F.data == CB_TOPUP_AUTO)
+async def topup_auto_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """⚡️ Avtomatik to'lov — Stars miqdorini so'raydi."""
+    await callback.answer()
+    await state.set_state(TopupStates.waiting_for_auto_amount)
+    await callback.message.answer(
+        AUTO_AMOUNT_TEXT,
+        parse_mode="HTML",
+        reply_markup=get_topup_cancel_kb(),
+    )
+
+
 # =============================================================
-# 2. BEKOR QILISH (state handler'laridan OLDIN)
+# 3. BEKOR QILISH (state handler'laridan OLDIN)
 # =============================================================
 @router.callback_query(F.data == CB_TOPUP_CANCEL)
 async def topup_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
@@ -139,38 +257,255 @@ async def topup_cancel_callback(callback: CallbackQuery, state: FSMContext) -> N
     await callback.message.answer("❌ Balans to'ldirish bekor qilindi.")
 
 
-@router.message(TopupStates.waiting_for_amount, F.text == "/cancel")
-@router.message(TopupStates.waiting_for_receipt, F.text == "/cancel")
+@router.message(
+    StateFilter(
+        TopupStates.waiting_for_method,
+        TopupStates.waiting_for_auto_amount,
+        TopupStates.waiting_for_amount,
+        TopupStates.waiting_for_receipt,
+    ),
+    F.text == "/cancel",
+)
 async def topup_cancel_text(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("❌ Balans to'ldirish bekor qilindi.")
 
 
 # =============================================================
-# 3. MIQDOR
+# 4. AVTOMATIK TO'LOV — MIQDOR + XTR INVOYS
 # =============================================================
-@router.message(TopupStates.waiting_for_amount, F.text)
-async def topup_amount(message: Message, state: FSMContext) -> None:
-    """Miqdorni tekshiradi va karta rekvizitlari bilan chek so'raydi."""
-    raw = (message.text or "").strip().replace(" ", "")
-    if not raw.isdigit():
+def _parse_amount(raw: str) -> int | None:
+    """Matndan butun son ajratadi (bo'shliqlar olib tashlanadi)."""
+    text = (raw or "").strip().replace(" ", "")
+    if not text.isdigit():
+        return None
+    return int(text)
+
+
+@router.message(TopupStates.waiting_for_auto_amount, F.text)
+async def topup_auto_amount(message: Message, state: FSMContext) -> None:
+    """Miqdorni tekshiradi va Telegram Stars (XTR) invoysini yuboradi."""
+    amount = _parse_amount(message.text or "")
+    if amount is None:
         await message.answer(
             "⚠️ Iltimos, miqdorni faqat butun son ko'rinishida yuboring "
             "(masalan: <code>100</code>).",
+            parse_mode="HTML",
             reply_markup=get_topup_cancel_kb(),
         )
         return
 
-    amount = int(raw)
     if amount < MIN_TOPUP_STARS:
         await message.answer(
             f"⚠️ Minimal to'ldirish — <b>{MIN_TOPUP_STARS} ⭐️</b>.",
+            parse_mode="HTML",
             reply_markup=get_topup_cancel_kb(),
         )
         return
     if amount > MAX_TOPUP_STARS:
         await message.answer(
             f"⚠️ Maksimal to'ldirish — <b>{MAX_TOPUP_STARS} ⭐️</b>.",
+            parse_mode="HTML",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    try:
+        deposit = await DepositRepository.create_deposit(user_id=user_id, amount=amount)
+    except (RepositoryError, ValueError) as exc:
+        logger.warning("Avtomatik topup deposit yaratilmadi (user=%s): %s", user_id, exc)
+        await state.clear()
+        await message.answer(
+            "⚠️ So'rovni saqlab bo'lmadi. Iltimos, /start bosib qaytadan "
+            "urinib ko'ring.",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+    except SQLAlchemyError:
+        logger.exception("Avtomatik topup deposit DB xatosi (user=%s)", user_id)
+        await state.clear()
+        await message.answer(
+            "⚠️ Bazada xatolik yuz berdi. Keyinroq urinib ko'ring.",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+
+    try:
+        await send_stars_invoice(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            title=f"{amount} Stars",
+            description=f"Bot balansini {amount} ⭐️ ga to'ldirish",
+            payload=build_topup_payload(deposit.id, user_id),
+            amount_xtr=amount,
+        )
+    except (TelegramAPIError, ValueError, RuntimeError) as exc:
+        logger.exception(
+            "Topup invoysi yuborilmadi (user=%s deposit=%s): %s",
+            user_id, deposit.id, exc,
+        )
+        # Bekor qilingan so'rovni rad etamiz — keyingi urinishda yangi so'rov.
+        try:
+            await DepositRepository.reject_deposit(
+                deposit.id, AUTO_DEPOSIT_ADMIN_ID, "Invoys yuborilmadi"
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("Topup so'rovini rad etib bo'lmadi: %s", deposit.id)
+        await state.clear()
+        await message.answer(
+            "⚠️ To'lov oynasini yuborib bo'lmadi. Keyinroq urinib ko'ring.",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+
+    await state.clear()
+    await message.answer(
+        AUTO_INVOICE_SENT_TEXT.format(amount=amount, deposit_id=deposit.id),
+        parse_mode="HTML",
+    )
+    logger.info(
+        "Topup XTR invoys yuborildi: user=%s deposit=%s amount=%s",
+        user_id, deposit.id, amount,
+    )
+
+
+@router.pre_checkout_query(
+    F.invoice_payload.startswith(f"{TOPUP_PAYLOAD_PREFIX}:")
+)
+async def topup_pre_checkout(query: PreCheckoutQuery) -> None:
+    """Topup invoysi uchun pre_checkout — 10 soniya ichida javob beriladi."""
+    parsed = parse_topup_payload(query.invoice_payload)
+    if parsed is None:
+        await query.answer(ok=False, error_message="Noto'g'ri to'lov so'rovi!")
+        return
+
+    deposit_id, owner_id = parsed
+    if owner_id != query.from_user.id:
+        await query.answer(
+            ok=False, error_message="To'lov boshqa foydalanuvchiga tegishli!"
+        )
+        return
+
+    deposit = await DepositRepository.get_deposit(deposit_id)
+    if (
+        deposit is None
+        or deposit.user_id != query.from_user.id
+        or deposit.status != DEPOSIT_PENDING
+    ):
+        await query.answer(
+            ok=False,
+            error_message="So'rov topilmadi yoki allaqachon qayta ishlangan!",
+        )
+        return
+
+    await query.answer(ok=True)
+    logger.info(
+        "Topup pre_checkout tasdiqlandi: user=%s deposit=%s",
+        query.from_user.id, deposit_id,
+    )
+
+
+@router.message(
+    F.successful_payment.invoice_payload.startswith(f"{TOPUP_PAYLOAD_PREFIX}:")
+)
+async def topup_successful_payment(message: Message) -> None:
+    """
+    Avtomatik to'lov muvaffaqiyatli yakunlangach balansni darhol to'ldiradi.
+
+    Idempotent: takroriy `successful_payment` balansni ikki marta oshirmaydi
+    (`DepositStateError`).
+    """
+    payment = message.successful_payment
+    if payment is None or message.from_user is None:
+        return
+
+    parsed = parse_topup_payload(payment.invoice_payload)
+    if parsed is None:
+        logger.error(
+            "Topup successful_payment: noto'g'ri payload=%r user=%s",
+            payment.invoice_payload, message.from_user.id,
+        )
+        return
+
+    deposit_id, _owner_id = parsed
+    try:
+        deposit, new_balance = await DepositRepository.confirm_deposit(
+            deposit_id, AUTO_DEPOSIT_ADMIN_ID
+        )
+    except DepositStateError:
+        await message.answer(
+            "✅ Bu to'lov allaqachon hisobga olingan — balans ikki marta "
+            "qo'shilmadi."
+        )
+        return
+    except (RepositoryError, SQLAlchemyError):
+        logger.exception(
+            "Topup to'lovini tasdiqlashda xatolik: deposit=%s charge=%s",
+            deposit_id, payment.telegram_payment_charge_id,
+        )
+        await message.answer(
+            "⚠️ To'lov qabul qilindi, lekin balansni yangilashda xatolik "
+            "bo'ldi. Administrator tez orada tekshiradi."
+        )
+        return
+
+    await message.answer(
+        AUTO_SUCCESS_TEXT.format(
+            amount=deposit.amount,
+            balance=new_balance,
+            deposit_id=deposit.id,
+        ),
+        parse_mode="HTML",
+    )
+
+    for admin_id in settings.ADMIN_IDS:
+        try:
+            await message.bot.send_message(
+                admin_id,
+                ADMIN_AUTO_TOPUP_TEXT.format(
+                    user_id=deposit.user_id,
+                    amount=deposit.amount,
+                    deposit_id=deposit.id,
+                ),
+                parse_mode="HTML",
+            )
+        except TelegramAPIError:
+            logger.warning("Adminga topup xabari yetmadi: %s", admin_id)
+
+    logger.info(
+        "Topup avtomatik tasdiqlandi: user=%s deposit=%s amount=%s",
+        deposit.user_id, deposit.id, deposit.amount,
+    )
+
+
+# =============================================================
+# 5. KARTA — MIQDOR
+# =============================================================
+@router.message(TopupStates.waiting_for_amount, F.text)
+async def topup_amount(message: Message, state: FSMContext) -> None:
+    """Miqdorni tekshiradi va karta rekvizitlari bilan chek so'raydi."""
+    amount = _parse_amount(message.text or "")
+    if amount is None:
+        await message.answer(
+            "⚠️ Iltimos, miqdorni faqat butun son ko'rinishida yuboring "
+            "(masalan: <code>100</code>).",
+            parse_mode="HTML",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+
+    if amount < MIN_TOPUP_STARS:
+        await message.answer(
+            f"⚠️ Minimal to'ldirish — <b>{MIN_TOPUP_STARS} ⭐️</b>.",
+            parse_mode="HTML",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
+    if amount > MAX_TOPUP_STARS:
+        await message.answer(
+            f"⚠️ Maksimal to'ldirish — <b>{MAX_TOPUP_STARS} ⭐️</b>.",
+            parse_mode="HTML",
             reply_markup=get_topup_cancel_kb(),
         )
         return
@@ -178,7 +513,7 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
     number, holder = await _card_details()
     if not number:
         await state.clear()
-        await message.answer(NO_CARD_TEXT)
+        await message.answer(NO_CARD_TEXT, parse_mode="HTML")
         return
 
     # Unikal summa bilan so'rov yaratamiz: `stars * SOM_PER_STAR + 1..99`.
@@ -196,6 +531,8 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
             )
         except (RepositoryError, ValueError) as exc:
             logger.warning("Unikal summa yaratilmadi (user=%s): %s", user_id, exc)
+        except SQLAlchemyError:
+            logger.exception("Unikal summa DB xatosi (user=%s)", user_id)
 
     await state.update_data(
         amount=amount,
@@ -236,7 +573,7 @@ async def topup_amount(message: Message, state: FSMContext) -> None:
 
 
 # =============================================================
-# 4. CHEK (rasm) — so'rov yaratish + adminlarga yuborish
+# 6. KARTA — CHEK (rasm) — so'rovni biriktirish + adminlarga yuborish
 # =============================================================
 async def _submit_receipt(
     message: Message, state: FSMContext, file_id: str
@@ -278,6 +615,13 @@ async def _submit_receipt(
             reply_markup=get_topup_cancel_kb(),
         )
         return
+    except SQLAlchemyError:
+        logger.exception("Deposit yaratishda DB xatosi (user=%s)", user.id)
+        await message.answer(
+            "⚠️ Bazada xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.",
+            reply_markup=get_topup_cancel_kb(),
+        )
+        return
 
     if deposit.status == DEPOSIT_APPROVED:
         await state.clear()
@@ -285,7 +629,8 @@ async def _submit_receipt(
             "✅ <b>Bu to'lov allaqachon avtomatik tasdiqlangan!</b>\n\n"
             f"├ Miqdor: <b>+{deposit.amount} ⭐️</b>\n"
             f"└ So'rov: <code>#{deposit.id}</code>\n\n"
-            "Balansingiz to'ldirilgan — chek yuborish shart emas."
+            "Balansingiz to'ldirilgan — chek yuborish shart emas.",
+            parse_mode="HTML",
         )
         return
 
@@ -293,8 +638,9 @@ async def _submit_receipt(
         await state.clear()
         await message.answer(
             "❌ <b>Bu so'rov allaqachon rad etilgan.</b>\n\n"
-            "Yangi to'ldirish uchun \"💳 Balans to'ldirish\" tugmasini "
-            "qaytadan bosing."
+            'Yangi to\'ldirish uchun "💳 Balans to\'ldirish" tugmasini '
+            "qaytadan bosing.",
+            parse_mode="HTML",
         )
         return
 
@@ -312,7 +658,8 @@ async def _submit_receipt(
         f"├ So'rov: <code>#{deposit.id}</code>\n"
         "└ Holat: 🕓 <i>admin tekshiruvi kutilmoqda</i>\n\n"
         "To'lov jurnal orqali kelganda balans <b>avtomatik</b> qo'shiladi; "
-        "aks holda admin chekni tasdiqlaydi."
+        "aks holda admin chekni tasdiqlaydi.",
+        parse_mode="HTML",
     )
 
     await _notify_admins_about_deposit(message, deposit, amount)
@@ -337,6 +684,7 @@ async def topup_receipt_document(message: Message, state: FSMContext) -> None:
     if document is None or not (document.mime_type or "").startswith("image/"):
         await message.answer(
             "⚠️ Iltimos, chekni <b>rasm</b> qilib yuboring (skrinshot).",
+            parse_mode="HTML",
             reply_markup=get_topup_cancel_kb(),
         )
         return
@@ -348,18 +696,31 @@ async def topup_receipt_invalid(message: Message) -> None:
     """Boshqa kontent turi kelsa — qayta so'raydi."""
     await message.answer(
         "⚠️ Chekni <b>rasm</b> ko'rinishida yuboring (skrinshot).",
+        parse_mode="HTML",
         reply_markup=get_topup_cancel_kb(),
     )
 
 
+@router.message(TopupStates.waiting_for_method)
+async def topup_method_invalid(message: Message) -> None:
+    """Usul tanlanmagan — tugmalarni eslatib o'tadi."""
+    await message.answer(
+        "Iltimos, to'lov usulini yuqoridagi tugmalardan birini bosib tanlang 👇",
+        parse_mode="HTML",
+        reply_markup=get_topup_methods_kb(),
+    )
+
+
 # =============================================================
-# 5. ADMINLARGA XABAR
+# 7. ADMINLARGA XABAR (karta cheki)
 # =============================================================
 async def _notify_admins_about_deposit(
     message: Message, deposit: Any, amount: int
 ) -> None:
     """Barcha adminlarga chekni tasdiqlash/rad etish tugmalari bilan yuboradi."""
     user = message.from_user
+    if user is None:
+        return
     if user.username:
         who = f"@{html.escape(user.username)}"
     else:
