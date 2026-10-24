@@ -174,6 +174,28 @@ def _parse_product_id(data: str, prefix: str) -> int | None:
     return product_id if product_id > 0 else None
 
 
+async def ensure_user_row(user_id: int, from_user: Any) -> None:
+    """
+    Self-heal: bazada foydalanuvchi yozuvi yo'q bo'lsa yaratib qo'yadi.
+
+    "Foydalanuvchi topilmadi" RepositoryError xatosini oldini oladi.
+    DB ishlamasa ham oqimni buzmasin — xato faqat loglanadi.
+    """
+    
+    try:
+        row = await UserRepository.get_user(user_id)
+        if row is None:
+            await UserRepository.get_or_create_user(
+                user_id=user_id,
+                username=getattr(from_user, "username", None),
+                first_name=getattr(from_user, "first_name", None),
+                last_name=getattr(from_user, "last_name", None),
+            )
+            logger.info("Self-heal: yangi user=%s bazaga qo'shildi (shop)", user_id)
+    except Exception:  # noqa: BLE001 — self-heal oqimni buzmasin
+        logger.exception("Self-heal: user=%s yaratib bo'lmadi (shop)", user_id)
+
+
 def _price_uzs_of(product: Any) -> int:
     """
     Mahsulotning so'mdagi narxi (ko'rsatish uchun).
@@ -273,7 +295,11 @@ async def _category_view(category: str) -> tuple[str, Any, str | None]:
     Uchinchi qiymat — toifadagi birinchi mahsulotning `image_file_id` si
     (rasm yuborilsa, ro'yxat shu rasmning izohi sifatida chiqadi).
     """
-    products = await ProductRepository.get_products_by_category(category)
+    try:
+        products = await ProductRepository.get_products_by_category(category)
+    except Exception:  # noqa: BLE001 — DB xatosi jimlikka emas, aniq javobga
+        logger.exception("Toifa mahsulotlari o'qilmadi: category=%s", category)
+        raise
     category_title = CATEGORY_TITLES.get(category, CATEGORY_EMOJI.get(category, "🛍"))
 
     if not products:
@@ -312,7 +338,15 @@ async def _category_view(category: str) -> tuple[str, Any, str | None]:
 
 async def _send_category_view(target: Any, category: str) -> None:
     """Tayyorlangani ko'rinishni yuboradi (rasm bo'lsa foto, aks holda matn)."""
-    text, markup, image_file_id = await _category_view(category)
+    try:
+        text, markup, image_file_id = await _category_view(category)
+    except Exception:  # noqa: BLE001 — foydalanuvchi hech qachon sokin qolmasin
+        logger.exception("Toifa ko'rinishi yaratilmadi: category=%s", category)
+        await target.answer(
+            "⚠️ Bo'limni yuklashda xatolik. Iltimos, keyinroq urinib ko'ring. "
+            "Savol bo'lsa administratorga murojaat qiling.",
+        )
+        return
     if image_file_id and hasattr(target, "answer_photo"):
         try:
             await target.answer_photo(
@@ -457,11 +491,13 @@ async def _create_card_checkout(
         return
 
     user_id = target.from_user.id if target.from_user else target.chat.id
+    # Self-heal: user yozuvi yo'q bo'lsa yaratamiz.
+    await ensure_user_row(user_id, target.from_user)
     try:
         order = await OrderRepository.create_card_order(
             user_id=user_id, product_id=product.id, order_data=extra or {}
         )
-    except RepositoryError:
+    except Exception:  # noqa: BLE001 — har qanday DB xato aniq javob oladi
         logger.exception("UZS buyurtma yaratilmadi: user=%s product=%s", user_id, product.id)
         await target.answer(ALERT_PURCHASE_FAILED)
         return
@@ -659,6 +695,10 @@ async def _purchase_with_balance(
     user_id = callback.from_user.id
     user = await UserRepository.get_user(user_id)
     if user is None:
+        # Self-heal: yozuv yo'q bo'lsa yaratib qayta o'qiymiz.
+        await ensure_user_row(user_id, callback.from_user)
+        user = await UserRepository.get_user(user_id)
+    if user is None:
         await callback.message.answer(
             "❌ Profilingiz topilmadi! /start buyrug'ini bosing."
         )
@@ -695,6 +735,12 @@ async def _purchase_with_balance(
         logger.exception(
             "Balans xaridi amalga oshmadi: user=%s product=%s",
             user_id, product.id,
+        )
+        await callback.message.answer(ALERT_PURCHASE_FAILED)
+        return
+    except Exception:  # noqa: BLE001 — DB/tarmoq xatosi ham aniq javob oladi
+        logger.exception(
+            "Balans xaridi DB xatosi: user=%s product=%s", user_id, product.id
         )
         await callback.message.answer(ALERT_PURCHASE_FAILED)
         return
@@ -785,6 +831,10 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
 
     user_id = callback.from_user.id
 
+    # Self-heal: user yozuvi yo'q bo'lsa yaratamiz ("Foydalanuvchi topilmadi"
+    # RepositoryError oldini oladi).
+    await ensure_user_row(user_id, callback.from_user)
+
     # Bazada pending buyurtma yoziladi (status='pending')
     try:
         order = await OrderRepository.create_order(
@@ -797,7 +847,7 @@ async def pay_with_xtr(callback: CallbackQuery) -> None:
                 "category": product.category,
             },
         )
-    except RepositoryError:
+    except Exception:  # noqa: BLE001 — har qanday DB xato aniq javob oladi
         logger.exception(
             "Buyurtma yaratilmadi: user=%s product=%s", user_id, product.id
         )

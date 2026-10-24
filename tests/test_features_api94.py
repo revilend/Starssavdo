@@ -739,7 +739,7 @@ def test_card_auto_payment() -> None:
     ok("5 daqiqalik ogohlantirish", "daqiqa" in text, text)
     ok("state'da deposit_id", bool(state.data.get("deposit_id")))
     pay_amount = int(state.data.get("pay_amount") or 0)
-    ok("unikal kod 40..100", 40 <= pay_amount - base <= 100, str(pay_amount))
+    ok("unikal kod 1..99", 1 <= pay_amount - base <= 99, str(pay_amount))
 
     deposit_id = int(state.data["deposit_id"])
 

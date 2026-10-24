@@ -161,15 +161,28 @@ def _user_id_of(target: Message) -> int:
     return target.from_user.id if target.from_user else target.chat.id
 
 
+async def _safe_user_balance(user_id: int) -> int:
+    """Balansni xavfsiz o'qiydi — DB xatolikda 0 qaytaradi (oqim yashamaydi)."""
+    try:
+        user = await UserRepository.get_user(user_id)
+        return user.stars_balance if user else 0
+    except Exception:  # noqa: BLE001 — DB xatosi menyuni to'xtatmasin
+        logger.exception("Balans o'qilmadi (user=%s) — topup menyusi ochiladi", user_id)
+        return 0
+
+
 # =============================================================
 # 1. USULLAR MENYUSI
 # =============================================================
 async def _begin_topup(target: Message, state: FSMContext) -> None:
     """To'ldirish usullarini taklif qiladi (avtomatik yoki karta)."""
     user_id = _user_id_of(target)
-    user = await UserRepository.get_user(user_id)
-    balance = user.stars_balance if user else 0
-    number, _holder = await _card_details()
+    balance = await _safe_user_balance(user_id)
+    try:
+        number, _holder = await _card_details()
+    except Exception:  # noqa: BLE001
+        logger.exception("Karta rekvizitlari o'qilmadi (user=%s)", user_id)
+        number = ""
 
     text = METHODS_TEXT.format(balance=balance)
     if number:
@@ -193,9 +206,12 @@ async def _begin_card_topup(target: Message, state: FSMContext) -> None:
         return
 
     user_id = _user_id_of(target)
-    user = await UserRepository.get_user(user_id)
-    balance = user.stars_balance if user else 0
-    price = await SettingsRepository.get_star_price()
+    balance = await _safe_user_balance(user_id)
+    try:
+        price = await SettingsRepository.get_star_price()
+    except Exception:  # noqa: BLE001 — DB xatolida .env qiymatiga tushamiz
+        logger.exception("Star narxi o'qilmadi (user=%s)", user_id)
+        price = settings.SOM_PER_STAR
 
     await state.set_state(TopupStates.waiting_for_amount)
     await target.answer(
@@ -228,9 +244,12 @@ async def _begin_direct_card_topup(target: Message, state: FSMContext) -> None:
         return
 
     user_id = _user_id_of(target)
-    user = await UserRepository.get_user(user_id)
-    balance = user.stars_balance if user else 0
-    price = await SettingsRepository.get_star_price()
+    balance = await _safe_user_balance(user_id)
+    try:
+        price = await SettingsRepository.get_star_price()
+    except Exception:  # noqa: BLE001 — DB xatolida .env qiymatiga tushamiz
+        logger.exception("Star narxi o'qilmadi (user=%s)", user_id)
+        price = settings.SOM_PER_STAR
 
     await state.set_state(TopupStates.waiting_for_amount)
     await target.answer(
@@ -580,6 +599,22 @@ async def _start_card_deposit(
     price = await SettingsRepository.get_star_price()
     user_id = _user_id_of(target)
 
+    # Self-heal: bazada foydalanuvchi yozuvi yo'q bo'lsa — yaratib olamiz
+    # ("Foydalanuvchi topilmadi" RepositoryError oldini oladi).
+    try:
+        _ensure_row = await UserRepository.get_user(user_id)
+        from_user = getattr(target, "from_user", None)
+        if _ensure_row is None:
+            await UserRepository.get_or_create_user(
+                user_id=user_id,
+                username=getattr(from_user, "username", None),
+                first_name=getattr(from_user, "first_name", None),
+                last_name=getattr(from_user, "last_name", None),
+            )
+            logger.info("Self-heal: yangi user=%s bazaga qo'shildi (topup)", user_id)
+    except Exception:  # noqa: BLE001 — self-heal muvaffaqiyatsiz oqimni buzmasin
+        logger.exception("Self-heal: user=%s yaratib bo'lmadi (topup)", user_id)
+
     try:
         deposit = await DepositRepository.create_deposit_with_unique_sum(
             user_id=user_id,
@@ -587,14 +622,14 @@ async def _start_card_deposit(
             som_per_star=price,
         )
     except (RepositoryError, ValueError) as exc:
-        logger.warning("Unikal summa yaratilmadi (user=%s): %s", user_id, exc)
+        logger.exception("Unikal summa yaratilmadi (user=%s): %s", user_id, exc)
         await target.answer(
             "⚠️ So'rovni yaratib bo'lmadi. Iltimos, /start bosib qaytadan "
             "urinib ko'ring.",
             reply_markup=get_topup_cancel_kb(),
         )
         return
-    except SQLAlchemyError:
+    except Exception:  # noqa: BLE001 — DB/tarmoq xatosi ham aniq javob oladi
         logger.exception("Unikal summa DB xatosi (user=%s)", user_id)
         await target.answer(
             "⚠️ Bazada xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.",
