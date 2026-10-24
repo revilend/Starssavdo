@@ -188,21 +188,58 @@ def _bootstrap_raw_schema(sync_conn: Connection) -> None:
     )
 
 
+# NOT NULL string ustunlari uchun migratsiya default'lari.
+# Eski bazada yetishmayotgan VARCHAR ustunlar shu qiymat bilan qo'shiladi —
+# aks holda "qo'lda migratsiya kerak" deya o'tkazib yuborilardi va
+# "column ... does not exist" (ProgrammingError) production'da chiqar edi.
+STRING_COLUMN_DEFAULTS: dict[tuple[str, str], str] = {
+    ("transactions", "tx_type"): "'system'",
+    ("transactions", "description"): "NULL",
+    ("orders", "payment_method"): "'balance'",
+    ("orders", "telegram_payment_charge_id"): "NULL",
+    ("orders", "payment_comment"): "NULL",
+    ("products", "category"): "'stars'",
+    ("products", "title"): "'Mahsulot'",
+    ("products", "description"): "NULL",
+    ("products", "image_file_id"): "NULL",
+    ("channels", "title"): "'Kanal'",
+    ("channels", "invite_link"): "'https://t.me/0'",
+    ("channels", "username"): "NULL",
+    ("withdrawals", "destination_type"): "'ton_wallet'",
+    ("withdrawals", "destination_address"): "'unknown'",
+    ("withdrawals", "status"): "'pending'",
+    ("referrals", "status"): "'pending'",
+    ("users", "username"): "NULL",
+    ("users", "first_name"): "'User'",
+    ("users", "last_name"): "NULL",
+    ("promo_codes", "code"): "'INVALID'",
+    ("anti_fraud_logs", "severity"): "'medium'",
+    ("anti_fraud_logs", "reason"): "'unknown'",
+}
+
+
 def _fallback_default_sql(column, dialect_name: str) -> str | None:
     """
-    NOT NULL ustun uchun xavfsiz DB default topadi (PostgreSQL).
+    NOT NULL ustun uchun xavfsiz DB default topadi (dialektnaundum).
 
-    Eski bazada `deposits.status` kabi NOT NULL ustun yetishmasa, uni
-    defaultsiz qo'shib bo'lmaydi (`ALTER TABLE ... ADD COLUMN` xato beradi).
-    Shu yordamchi tipga mos xavfsiz qiymat qaytaradi.
+    Eski bazada `transactions.tx_type` kabi NOT NULL ustun yetishmasa, uni
+    defaultsiz qo'shib bo'lmaydi (`ALTER TABLE ... ADD COLUMN` xato beradi —
+    Postgres ham, SQLite ham). Shu yordamchi tipga mos xavfsiz qiymat
+    qaytarmoqda: string/varchar yo'q bo'lsa hamda har qam holda ishlaydi.
     """
-    if dialect_name != "postgresql":
-        return None
-
     if column.name == "status":
         return "'pending'"
 
     type_name = type(column.type).__name__.lower()
+    if "string" in type_name or "text" in type_name or "varchar" in type_name:
+        # NOT NULL string ustunlari — jadval/ustun bo'yicha intelligent default:
+        # migrator endi ularni skip qilmasdan qo'shadi.
+        key = (column.table.name, column.name)
+        default = STRING_COLUMN_DEFAULTS.get(key)
+        if default is not None and default != "NULL":
+            return default
+        # Xaritada yo'q string ustun — bo'sh satr default xavfsiz yordam
+        return "''"
     if "int" in type_name:
         return "0"
     if "bool" in type_name:
