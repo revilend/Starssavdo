@@ -118,17 +118,23 @@ SCHEMA_DDL: tuple[str, ...] = (
 
 # Ma'lumotlarni to'g'rilash: eski qatorlarda NULL balans bo'lsa 0 ga tenglash
 # (aks holda `stars_balance + amount` TypeError beradi).
+# Eski `products.name` NULL bo'lsa `title` dan to'ldiriladi (yangi INSERT'lar
+# uchun `name` DEFAULT '' bilan COLUMN_DEFAULTS'da kafolatlangan).
 DATA_FIXUPS: tuple[str, ...] = (
     "UPDATE users SET stars_balance = 0 WHERE stars_balance IS NULL",
     "UPDATE users SET total_earned_stars = 0 WHERE total_earned_stars IS NULL",
     "UPDATE users SET channels_verified = false WHERE channels_verified IS NULL",
     "UPDATE users SET is_active = true WHERE is_active IS NULL",
+    "UPDATE products SET name = COALESCE(title, '') WHERE name IS NULL",
 )
 
 # Ustun default'lari (yangi qatorlar uchun DB darajasida kafolat).
 COLUMN_DEFAULTS: tuple[str, ...] = (
     "ALTER TABLE users ALTER COLUMN stars_balance SET DEFAULT 0",
     "ALTER TABLE users ALTER COLUMN total_earned_stars SET DEFAULT 0",
+    # Bazadagi eski products jadvalida `name` NOT NULL — agar default bo'lmasa,
+    # seed'dagi INSERT (title bilan) NotNullViolationError beradi.
+    "ALTER TABLE products ALTER COLUMN name SET DEFAULT ''",
 )
 
 # Eski bazada `status` CHECK'i boshqa qiymatlar bilan yaratilgan bo'lsa,
