@@ -73,6 +73,7 @@ import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -295,12 +296,18 @@ def webhook_endpoint_url() -> str:
 async def _start_webhook() -> None:
     """Telegram webhookini o'rnatadi (Render https manzili bilan)."""
     url = webhook_endpoint_url()
-    await bot.set_webhook(
-        url=url,
-        drop_pending_updates=True,
-        secret_token=settings.WEBHOOK_SECRET or None,
-        allowed_updates=ALLOWED_UPDATES,
-    )
+    try:
+        await bot.set_webhook(
+            url=url,
+            drop_pending_updates=True,
+            secret_token=settings.WEBHOOK_SECRET or None,
+            allowed_updates=ALLOWED_UPDATES,
+        )
+    except TelegramAPIError:
+        logger.exception(
+            "Webhook o'rnatilmadi (Telegram server xatosi) — bot ishlashda davom etadi"
+        )
+        return
     logger.info(
         "Webhook o'rnatildi: %s (secret_token=%s, allowed_updates=%s)",
         url,
@@ -331,7 +338,12 @@ async def _start_polling() -> asyncio.Task[None]:
     SIGTERM kelganda uvicorn lifespan shutdown'ni ishga tushiradi va
     vazifa bekor qilinadi.
     """
-    await bot.delete_webhook(drop_pending_updates=True)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except TelegramAPIError:
+        # Telegram server vaqtinchalik Bad Gateway bo'lishi mumkin —
+        # polling ishga tushishi uchun webhookni o'chirish zarur emas.
+        logger.warning("Webhook o'chirilmadi (vaqtinchalik Telegram xatosi)")
     task = asyncio.create_task(
         dp.start_polling(
             bot,
@@ -415,18 +427,32 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         # 1.1) Yetishmayotgan jadvallar va ustunlar yaratiladi
         # (`deposits`, `transactions`, `users.total_earned_stars`, ...)
-        await ensure_schema()
+        try:
+            await ensure_schema()
+        except Exception:  # noqa: BLE001 — xato loglanadi, lekin bot ishga tushadi
+            logger.exception("ensure_schema() xatosi — bot ishlashda davom etadi")
 
         # 1.2) Do'kon bo'sh bo'lsa — boshlang'ich mahsulotlar (seed)
-        await seed_default_products()
+        try:
+            await seed_default_products()
+        except Exception:  # noqa: BLE001 — seed muvaffaqiyatsiz bo'lsa ham bot ishlaydi
+            logger.exception("seed_default_products() xatosi — bot ishlashda davom etadi")
 
         # 1.3) Tugma override'lari (admin panel) va premium emoji ID'lari
-        await load_button_overrides()
-        await load_custom_emojis(bot)
+        try:
+            await load_button_overrides()
+        except Exception:  # noqa: BLE001 — xato loglanadi
+            logger.exception("load_button_overrides() xatosi — bot ishlashda davom etadi")
+        try:
+            await load_custom_emojis(bot)
+        except Exception:  # noqa: BLE001 — emoji yuklanmasa ham bot ishlaydi
+            logger.exception("load_custom_emojis() xatosi — bot ishlashda davom etadi")
 
         # 1.4) Komandalar menyusi: setMyCommands + menyu tugmasi (4 to'rtburchak).
-        # Xato startupni buzmaydi — komandalar o'rnatilmasa ham bot ishlaydi.
-        await setup_bot_commands(bot)
+        try:
+            await setup_bot_commands(bot)
+        except Exception:  # noqa: BLE001 — komandalar o'rnatilmasa ham bot ishlaydi
+            logger.exception("setup_bot_commands() xatosi — bot ishlashda davom etadi")
 
         # 1.5) Fon vazifalari: to'lov muddati va (ixtiyoriy) Telethon userbot.
         expiry_task = asyncio.create_task(
