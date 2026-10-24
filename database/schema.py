@@ -126,15 +126,23 @@ DATA_FIXUPS: tuple[str, ...] = (
     "UPDATE users SET channels_verified = false WHERE channels_verified IS NULL",
     "UPDATE users SET is_active = true WHERE is_active IS NULL",
     "UPDATE products SET name = COALESCE(title, '') WHERE name IS NULL",
+    "UPDATE products SET price_xtr = COALESCE(price_xtr, 0) WHERE price_xtr IS NULL",
+    "UPDATE products SET price_uzs = COALESCE(price_uzs, 0) WHERE price_uzs IS NULL",
+    "UPDATE products SET sort_order = COALESCE(sort_order, 0) WHERE sort_order IS NULL",
+    "UPDATE products SET is_active = COALESCE(is_active, true) WHERE is_active IS NULL",
 )
 
 # Ustun default'lari (yangi qatorlar uchun DB darajasida kafolat).
 COLUMN_DEFAULTS: tuple[str, ...] = (
     "ALTER TABLE users ALTER COLUMN stars_balance SET DEFAULT 0",
     "ALTER TABLE users ALTER COLUMN total_earned_stars SET DEFAULT 0",
-    # Bazadagi eski products jadvalida `name` NOT NULL — agar default bo'lmasa,
-    # seed'dagi INSERT (title bilan) NotNullViolationError beradi.
+    # Bazadagi eski products jadvalida bir nechta NOT NULL ustun default'siz —
+    # seed'dagi INSERT bitta NULL qiymatda ham NotNullViolationError berardi.
     "ALTER TABLE products ALTER COLUMN name SET DEFAULT ''",
+    "ALTER TABLE products ALTER COLUMN price_xtr SET DEFAULT 0",
+    "ALTER TABLE products ALTER COLUMN price_uzs SET DEFAULT 0",
+    "ALTER TABLE products ALTER COLUMN sort_order SET DEFAULT 0",
+    "ALTER TABLE products ALTER COLUMN is_active SET DEFAULT true",
 )
 
 # Eski bazada `status` CHECK'i boshqa qiymatlar bilan yaratilgan bo'lsa,
