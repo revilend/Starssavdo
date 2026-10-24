@@ -128,9 +128,13 @@ AUTO_DEPOSIT_ADMIN_ID: Final[int] = 0
 # Kolliziyani oldini oluvchi "kod": asosiy summaga tasodifiy 40..100 so'm
 # qo'shiladi (30 000 -> 30 047). Bir xil miqdorni tanlagan ikki foydalanuvchi
 # har xil summa to'laydi va to'lov aniq moslanadi.
-DEPOSIT_CODE_MIN: Final[int] = 40
-DEPOSIT_CODE_MAX: Final[int] = 100
+DEPOSIT_CODE_MIN: Final[int] = 1
+DEPOSIT_CODE_MAX: Final[int] = 99
 DEPOSIT_CODE_ATTEMPTS: Final[int] = 30
+
+# Unikal summa "band" deya hisoblanadigan oyna: so'nggi 15 daqiqadagi
+# pending so'rovlar bilan solishtiriladi (eski pendinglar bandlikga to'sqinlik qilmaydi).
+DEPOSIT_CODE_WINDOW: Final[int] = 15 * 60  # soniya
 
 # Referal velocity (nakrutka) tekshiruvi
 VELOCITY_WINDOW: Final[timedelta] = timedelta(hours=1)  # so'nggi 1 soat
@@ -1891,10 +1895,13 @@ class DepositRepository:
         """
         Unikal to'lov summasi bilan `pending` so'rov yaratadi.
 
-        Summa = `amount * som_per_star` + 40..100 so'm "kod". Kod boshqa
-        `pending` so'rovlar bilan takrorlanmasligi tekshiriladi (30 urinish).
-        So'rov `DEPOSIT_TTL_SECONDS` (standart 5 daqiqa) muddatga ega —
-        muddat o'tsa `expired` bo'ladi va kechikkan to'lov hisoblanmaydi.
+        Summa = `amount * som_per_star` + tasodifiy 1..99 so'm "kod"
+        (masalan: 15 000 o'rniga 15 042 so'm). Kod faqat SO'NGGI
+        `DEPOSIT_CODE_WINDOW` (15 daqiqa) ichidagi `pending` so'rovlar bilan
+        bandlikka tekshiriladi (30 urinish), chunki kechikkan to'lovlar
+        avtomatik hisobga olinadi.
+        So'rov `DEPOSIT_TTL_SECONDS` muddatga ega — muddat o'tsa `expired`
+        bo'ladi va kechikkan to'lov hisoblanmaydi.
 
         Raises:
             ValueError: amount <= 0 yoki som_per_star <= 0.
@@ -1906,6 +1913,9 @@ class DepositRepository:
             raise ValueError("som_per_star 0 dan katta bo'lishi kerak")
 
         base = amount * som_per_star
+        # So'nggi 15 daqiqadagi "band" summalar oynasi (datetime bilan solishtirish
+        # SQLite da UTC string siqligi holda saqlanadi).
+        window_start = utcnow() - timedelta(seconds=DEPOSIT_CODE_WINDOW)
 
         async with get_session() as session:
             user = await session.get(User, user_id, with_for_update=True)
@@ -1921,6 +1931,7 @@ class DepositRepository:
                 taken = await session.scalar(
                     select(DepositRequest.id).where(
                         DepositRequest.status == DEPOSIT_PENDING,
+                        DepositRequest.created_at >= window_start,
                         DepositRequest.pay_amount == candidate,
                     )
                 )
@@ -1928,6 +1939,7 @@ class DepositRepository:
                     taken = await session.scalar(
                         select(Order.id).where(
                             Order.status == ORDER_PENDING,
+                            Order.created_at >= window_start,
                             Order.pay_amount == candidate,
                         )
                     )

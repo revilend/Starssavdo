@@ -25,6 +25,10 @@ ENV/
 *.pem
 *.key
 
+# Telethon sessiyalari (shaxsiy profil kaliti — GitHubga chiqmasin)
+*.session
+*.session-journal
+
 # =============================================================
 # Test va lokal artefaktlar
 # =============================================================

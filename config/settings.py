@@ -91,8 +91,8 @@ class Settings(BaseSettings):
         default=300,
         description=(
             "Karta to'lovida 1 ⭐️ narxi (so'm) — admin panelda ham "
-            "o'zgartiriladi. To'lov summasi `stars * SOM_PER_STAR + 40..100` "
-            "unikal kod sifatida hisoblanadi"
+            "o'zgartiriladi. To'lov summasi `stars * SOM_PER_STAR + 1..99` "
+            "tasodifiy unikal kod sifatida hisoblanadi"
         ),
         ge=1,
     )
@@ -108,10 +108,10 @@ class Settings(BaseSettings):
     )
 
     DEPOSIT_TTL_SECONDS: int = Field(
-        default=300,
+        default=900,
         description=(
             "Karta to'lovi so'rovining amal qilish muddati (soniya). "
-            "Standart 300 = 5 daqiqa; muddat o'tsa so'rov 'expired' bo'ladi"
+            "Standart 900 = 15 daqiqa; muddat o'tsa so'rov 'expired' bo'ladi"
         ),
         ge=60,
         le=86_400,
@@ -154,6 +154,51 @@ class Settings(BaseSettings):
             "Karta to'lovlari jurnali (yopiq guruh/kanal) ID. Shu chatga "
             "@CardXabarBot / @HUMOcardbot yuborgan to'lov xabarlari avtomatik "
             "o'qiladi. 0 — avtomatik tasdiqlash o'chirilgan (faqat chek + admin)"
+        ),
+    )
+
+    # --------------------- HUMO karta (env'dan, hardcode YO'Q) -----------------
+    # Bu o'zgaruvchilar .env orqali (pydantic-settings = os.getenv'ga teng)
+    # yuklanadi; karta ma'lumotlari hech qachon .py fayl ichiga yozilmaydi.
+    HUMO_CARD_NUMBER: str = Field(
+        default="",
+        description=(
+            "HUMO karta raqami (faqat .env'da: HUMO_CARD_NUMBER). Bo'sh bo'lsa "
+            "CARD_NUMBER qiymati ishlatiladi"
+        ),
+    )
+
+    HUMO_CARD_HOLDER: str = Field(
+        default="",
+        description=(
+            "HUMO karta egasi F.I.SH. (faqat .env'da: HUMO_CARD_HOLDER). Bo'sh "
+            "bo'lsa CARD_HOLDER qiymati ishlatiladi"
+        ),
+    )
+
+    # ------------------- Telethon (humo_listener uchun aliaslar) ---------------
+    TG_API_ID: int = Field(
+        default=0,
+        description=(
+            "Telethon API ID (my.telegram.org). .env'dan o'qiladi; bo'sh bo'lsa "
+            "TELEGRAM_API_ID qiymati ishlatiladi"
+        ),
+        ge=0,
+    )
+
+    TG_API_HASH: str = Field(
+        default="",
+        description=(
+            "Telethon API HASH (my.telegram.org). .env'dan o'qiladi; bo'sh "
+            "bo'lsa TELEGRAM_API_HASH qiymati ishlatiladi"
+        ),
+    )
+
+    TG_SESSION_NAME: str = Field(
+        default="humo_listener_session",
+        description=(
+            "Telethon sessiya fayli nomi (*.session .gitignore'da). Bo'sh bo'lsa "
+            "standart 'humo_listener_session' ishlatiladi"
         ),
     )
 
@@ -203,6 +248,28 @@ class Settings(BaseSettings):
             and self.TELEGRAM_API_HASH.strip()
             and self.TELEGRAM_SESSION_STRING.strip()
         )
+
+    # Faol qiymat: HUMO_CARD_* bustir bo'lsa CARD_* (env) qaytadi —
+    # karta ma'lumotlarining yagona manbasi faqat .env (os.getenv'e teng).
+    @property
+    def CARD_NUMBER_ACTIVE(self) -> str:
+        """Karta raqami: HUMO_CARD_NUMBER -> CARD_NUMBER (env backup)."""
+        return (self.HUMO_CARD_NUMBER or self.CARD_NUMBER).strip()
+
+    @property
+    def CARD_HOLDER_ACTIVE(self) -> str:
+        """Karta egasi F.I.SH.: HUMO_CARD_HOLDER -> CARD_HOLDER (env backup)."""
+        return (self.HUMO_CARD_HOLDER or self.CARD_HOLDER).strip()
+
+    @property
+    def TG_API_ID_ACTIVE(self) -> int:
+        """Telethon API ID: TG_API_ID -> TELEGRAM_API_ID (env backup)."""
+        return self.TG_API_ID or self.TELEGRAM_API_ID
+
+    @property
+    def TG_API_HASH_ACTIVE(self) -> str:
+        """Telethon API HASH: TG_API_HASH -> TELEGRAM_API_HASH (env backup)."""
+        return (self.TG_API_HASH or self.TELEGRAM_API_HASH).strip()
 
     # ------------------------ Validatorlar ----------------------
     @field_validator("ADMIN_IDS", mode="before")

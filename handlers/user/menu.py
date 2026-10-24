@@ -90,8 +90,7 @@ TX_LABELS: dict[str, str] = {
 }
 
 EMPTY_HISTORY_TEXT = (
-    "📜 <b>Tranzaksiyalar tarixi</b>\n\n"
-    "Sizda hali tranzaksiyalar mavjud emas.\n\n"
+    "📭 Sizda hali tranzaksiyalar mavjud emas.\n\n"
     "Balansni to'ldirib yoki do'stlaringizni taklif qilib boshlang! 🚀"
 )
 

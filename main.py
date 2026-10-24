@@ -126,6 +126,7 @@ from services.commands import setup_bot_commands
 from services.deposit_expiry import expiry_worker
 from services.emoji_loader import load_custom_emojis
 from services.userbot import HumocardUserbot
+from services.humo_listener import HumoListener
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +350,7 @@ async def _shutdown(
     polling_task: asyncio.Task[None] | None,
     expiry_task: asyncio.Task[None] | None = None,
     userbot: HumocardUserbot | None = None,
+    humo_listener: HumoListener | None = None,
 ) -> None:
     """Toza yopish: fon vazifalari, polling/webhook, DB pool va bot session."""
     logger.info("Bot yopilmoqda…")
@@ -360,6 +362,9 @@ async def _shutdown(
 
     if userbot is not None:
         await userbot.stop()
+
+    if humo_listener is not None:
+        await humo_listener.stop()
 
     if polling_task is not None:
         polling_task.cancel()
@@ -399,6 +404,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     polling_task: asyncio.Task[None] | None = None
     expiry_task: asyncio.Task[None] | None = None
     userbot = HumocardUserbot(bot)
+    humo_listener = HumoListener(bot)
     try:
         # 1) Database ulanishini tekshirish (majburiy)
         if not await test_connection():
@@ -431,15 +437,33 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:  # noqa: BLE001 — userbot startupni to'xtatmasin
             logger.exception("Userbotni ishga tushirishda xatolik")
 
+        # 1.6) HumoListener (Telethon): TG_API_ID/TG_API_HASH mavjud bo'lsa
+        #      Aiogram polling bilan BIRGA PARALLEL ishga tushadi
+        #      (asyncio.gather ikkala korutina yopilishini birga jadvalga qo'yadi).
+        #      Userbot (StringSession) allaqachon ishlayotgan bo'lsa — ikkinchi
+        #      tinglovchi keraksiz (to'lov ikki marta hisoblanmaydi, `FOR UPDATE`).
+        if not userbot.running and humo_listener.configured:
+            try:
+                if settings.BOT_MODE == "polling":
+                    _gathered = await asyncio.gather(
+                        _start_polling(), humo_listener.start()
+                    )
+                    polling_task = _gathered[0]
+                else:
+                    await humo_listener.start()
+            except Exception:  # noqa: BLE001 — listener startupni to'xtatmasin
+                logger.exception("HumoListener ishga tushirishda xatolik")
+
         # 2) Tanlangan rejimni ishga tushirish
         if settings.BOT_MODE == "polling":
-            polling_task = await _start_polling()
+            if polling_task is None:
+                polling_task = await _start_polling()
         else:
             await _start_webhook()
 
         yield
     finally:
-        await _shutdown(polling_task, expiry_task, userbot)
+        await _shutdown(polling_task, expiry_task, userbot, humo_listener)
 
 
 # -------------------------------------------------------------
